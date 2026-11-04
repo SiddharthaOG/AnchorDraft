@@ -26,9 +26,11 @@ describe('fetchHealth', () => {
       json: async () => mockResponse,
     })
 
-    const result = await fetchHealth()
+    const wakingUpFn = vi.fn()
+    const result = await fetchHealth(wakingUpFn)
 
     expect(result).toEqual(mockResponse)
+    expect(wakingUpFn).not.toHaveBeenCalled() // success before 3s
     expect(mockFetch).toHaveBeenCalledOnce()
     const call = mockFetch.mock.calls[0]
     expect(call[0]).toBe('http://test-engine:8000/v1/health')
@@ -37,6 +39,28 @@ describe('fetchHealth', () => {
         'X-Request-Id': expect.any(String),
       }),
     })
+  })
+
+  it('calls onWakingUp callback after 3s', async () => {
+    const mockResponse: HealthResponse = {
+      status: 'ok',
+      version: '1.2.3',
+      time: '2026-11-04T12:00:00.000Z',
+    }
+
+    // Delay the response by 4 seconds
+    mockFetch.mockImplementationOnce(() =>
+      new Promise(resolve => setTimeout(() => resolve({
+        ok: true,
+        json: async () => mockResponse,
+      }), 4000))
+    )
+
+    const wakingUpFn = vi.fn()
+    const result = await fetchHealth(wakingUpFn)
+
+    expect(result).toEqual(mockResponse)
+    expect(wakingUpFn).toHaveBeenCalledOnce()
   })
 
   it('throws HealthError on HTTP error status', async () => {
@@ -67,7 +91,7 @@ describe('fetchHealth', () => {
     })
   })
 
-  it('throws HealthError on timeout', async () => {
+  it('throws HealthError on timeout with isTimeout flag', async () => {
     const abortError = new DOMException('Aborted', 'AbortError')
     mockFetch.mockRejectedValueOnce(abortError)
 
@@ -75,7 +99,8 @@ describe('fetchHealth', () => {
     await expect(promise).rejects.toThrow(HealthError)
     await expect(promise).rejects.toMatchObject({
       status: 504,
-      message: 'Health check timeout',
+      message: 'Health check timeout after 60s',
+      isTimeout: true,
     })
   })
 

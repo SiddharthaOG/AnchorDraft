@@ -1,27 +1,26 @@
-import { useEffect, useState } from 'react'
-import { fetchHealth, HealthError, HealthResponse } from '../../lib/health'
-
-interface HealthState {
-  data: HealthResponse | null
-  error: string | null
-  loading: boolean
-}
+import { useEffect, useState, useCallback } from 'react'
+import { fetchHealth, HealthError, HealthStatus } from '../../lib/health'
 
 export function HealthCheck() {
-  const [state, setState] = useState<HealthState>({
+  const [state, setState] = useState<HealthStatus>({
     data: null,
     error: null,
     loading: true,
+    wakingUp: false,
   })
+
+  const handleWakingUp = useCallback(() => {
+    setState(prev => ({ ...prev, wakingUp: true }))
+  }, [])
 
   useEffect(() => {
     let mounted = true
 
     async function loadHealth() {
       try {
-        const data = await fetchHealth()
+        const data = await fetchHealth(handleWakingUp)
         if (!mounted) return
-        setState({ data, error: null, loading: false })
+        setState({ data, error: null, loading: false, wakingUp: false })
       } catch (err: unknown) {
         if (!mounted) return
         const message = err instanceof HealthError
@@ -29,7 +28,7 @@ export function HealthCheck() {
           : err instanceof Error
             ? err.message
             : 'Unknown error'
-        setState({ data: null, error: message, loading: false })
+        setState({ data: null, error: message, loading: false, wakingUp: false })
       }
     }
 
@@ -38,13 +37,23 @@ export function HealthCheck() {
     return () => {
       mounted = false
     }
-  }, [])
+  }, [handleWakingUp])
 
-  if (state.loading) {
+  if (state.loading && !state.wakingUp) {
     return (
       <div className="bg-white rounded-lg shadow p-6 text-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
         <p className="text-gray-600">Checking engine health...</p>
+      </div>
+    )
+  }
+
+  if (state.wakingUp) {
+    return (
+      <div className="bg-white rounded-lg shadow p-6 text-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+        <p className="text-yellow-700">Engine is waking up… (free tier cold start)</p>
+        <p className="text-gray-500 text-sm mt-1">This may take up to 60 seconds</p>
       </div>
     )
   }

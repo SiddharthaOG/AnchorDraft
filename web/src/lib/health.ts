@@ -6,11 +6,19 @@ export interface HealthResponse {
   time: string
 }
 
+export interface HealthStatus {
+  data: HealthResponse | null
+  error: string | null
+  loading: boolean
+  wakingUp: boolean
+}
+
 export class HealthError extends Error {
   constructor(
     message: string,
     public readonly status: number,
     public readonly originalError?: Error,
+    public readonly isTimeout: boolean = false,
   ) {
     super(message)
     this.name = 'HealthError'
@@ -21,9 +29,16 @@ function getEngineUrl(): string {
   return import.meta.env.VITE_ENGINE_URL || 'http://localhost:8000'
 }
 
-export async function fetchHealth(): Promise<HealthResponse> {
+export async function fetchHealth(
+  onWakingUp?: () => void,
+): Promise<HealthResponse> {
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 10000)
+  // 60s timeout for free-tier cold starts
+  const timeoutId = setTimeout(() => controller.abort(), 60000)
+  // 3s warning for "waking up" state
+  const warningId = setTimeout(() => {
+    onWakingUp?.()
+  }, 3000)
 
   try {
     const response = await fetch(`${getEngineUrl()}/v1/health`, {
@@ -50,7 +65,7 @@ export async function fetchHealth(): Promise<HealthResponse> {
   } catch (err) {
     if (err instanceof HealthError) throw err
     if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new HealthError('Health check timeout', 504, err)
+      throw new HealthError('Health check timeout after 60s', 504, err, true)
     }
     throw new HealthError(
       err instanceof Error ? err.message : 'Network error',
@@ -59,5 +74,6 @@ export async function fetchHealth(): Promise<HealthResponse> {
     )
   } finally {
     clearTimeout(timeoutId)
+    clearTimeout(warningId)
   }
 }
