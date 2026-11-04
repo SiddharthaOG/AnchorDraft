@@ -61,6 +61,12 @@ class TestCORS:
         assert "*" not in options.get("allow_origins", []), "Wildcard not allowed in CORS origins"
         assert options.get("allow_credentials") is True
         assert set(options.get("allow_methods", [])) == {"GET", "POST", "OPTIONS"}
+        # Check allowed headers include X-Request-Id, Authorization, Content-Type
+        assert "X-Request-Id" in options.get("allow_headers", [])
+        assert "Authorization" in options.get("allow_headers", [])
+        assert "Content-Type" in options.get("allow_headers", [])
+        # Check expose_headers includes X-Request-Id
+        assert "X-Request-Id" in options.get("expose_headers", [])
 
     @pytest.mark.asyncio
     async def test_cors_allows_configured_origin(self, client):
@@ -84,3 +90,36 @@ class TestCORS:
         # Should not have allow-origin header for disallowed origin
         assert "access-control-allow-origin" not in response.headers or \
                response.headers.get("access-control-allow-origin") != "http://evil.com"
+
+    @pytest.mark.asyncio
+    async def test_cors_preflight_allowed_origin_with_x_request_id(self, client):
+        """CORS preflight with allowed origin and X-Request-Id header is accepted."""
+        response = await client.options(
+            "/v1/health",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "x-request-id",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
+        assert response.headers.get("access-control-allow-credentials") == "true"
+        # Should allow the requested headers
+        assert "x-request-id" in response.headers.get("access-control-allow-headers", "").lower()
+
+    @pytest.mark.asyncio
+    async def test_cors_preflight_disallowed_origin_rejected(self, client):
+        """CORS preflight from disallowed origin is rejected."""
+        response = await client.options(
+            "/v1/health",
+            headers={
+                "Origin": "http://evil.com",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "x-request-id",
+            },
+        )
+        # Should not allow the disallowed origin
+        assert response.headers.get("access-control-allow-origin") != "http://evil.com"
+        # May not have the header at all, or may be a different value
+        # but definitely not the evil.com origin

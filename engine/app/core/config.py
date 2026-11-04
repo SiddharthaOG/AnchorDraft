@@ -1,5 +1,5 @@
 """Application configuration."""
-import os
+from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,4 +16,15 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: list[str] = []
 
 
-settings = Settings()
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Get settings instance (cached)."""
+    return Settings()
+
+
+def clear_settings_cache() -> None:
+    """Clear the settings cache (for testing)."""
+    get_settings.cache_clear()
+
+
+settings = get_settings()
