@@ -6,6 +6,8 @@
 
 **Revision 2 (3 Nov 2026):** decisions 1 to 9 confirmed by the architect; decision 9 resolved in favour of database functions; decisions 10 to 12 added.
 
+**Revision 3 (4 Nov 2026):** Decision 13 explicitly approved by the architect. Decision table is the current source of truth for status.
+
 ---
 
 ## 1. Objectives
@@ -78,19 +80,29 @@ sequenceDiagram
 
 | # | Decision | Reason | Risk and mitigation | Status |
 |---|---|---|---|---|
-| 1 | Asynchronous review: a background task plus a status field | Absorbs LLM latency and free-tier cold starts without a queue service | A restart can lose a job. Add a `failed` status, a retry button, and mark stuck reviews failed | PROPOSED |
-| 2 | FastAPI is the only writer of `reviews` and `findings` | Users cannot forge findings | Service key stays server-side only | PROPOSED |
-| 3 | The server computes text offsets from the model's quoted span | Never trust model-supplied offsets | If the quote is not found, drop the finding | PROPOSED |
-| 4 | Rules are data with stable keys in versioned kits | Insights survive rewording; findings stay explainable | Reviews record the kit version used | PROPOSED |
-| 5 | Pass the whole kit in the prompt, with a size cap | No retrieval to debug in 72 hours | Fail with a clear message if the kit is too big; retrieval is the later path | PROPOSED |
-| 6 | The LLM sits behind a provider adapter. Provider: **Gemini** on the free tier, with Groq as a configured alternative; the final choice is made at the provider spike (`REVIEW_ENGINE.md` section 3). Model name: VERIFY | Swap models, test with a fake provider | Keep the interface tiny; handle rate limits and timeouts explicitly | PROPOSED |
-| 7 | Schema is delivered as SQL migration files in the repository | Reviewable and reproducible | | PROPOSED |
-| 8 | Deterministic findings also pass through the citation validator | One citation rule for every finding | | PROPOSED |
+| 1 | Asynchronous review: a background task plus a status field | Absorbs LLM latency and free-tier cold starts without a queue service | A restart can lose a job. Add a `failed` status, a retry button, and mark stuck reviews failed | DECIDED |
+| 2 | FastAPI is the only writer of `reviews` and `findings` | Users cannot forge findings | Service key stays server-side only | DECIDED |
+| 3 | The server computes text offsets from the model's quoted span | Never trust model-supplied offsets | If the quote is not found, drop the finding | DECIDED |
+| 4 | Rules are data with stable keys in versioned kits | Insights survive rewording; findings stay explainable | Reviews record the kit version used | DECIDED |
+| 5 | Pass the whole kit in the prompt, with a size cap | No retrieval to debug in 72 hours | Fail with a clear message if the kit is too big; retrieval is the later path | DECIDED |
+| 6 | The LLM sits behind a provider adapter. Candidate providers: Gemini on the free tier, with Groq as a configured alternative; final provider selection and model identifier are determined at the provider spike (`REVIEW_ENGINE.md` section 3). | Swap models, test with a fake provider | Keep the interface tiny; handle rate limits and timeouts explicitly | DECIDED |
+| 7 | Schema is delivered as SQL migration files in the repository | Reviewable and reproducible | | DECIDED |
+| 8 | Deterministic findings also pass through the citation validator | One citation rule for every finding | | DECIDED |
 | 9 | All workflow state changes go through atomic `SECURITY DEFINER` database functions called with Supabase RPC (not triggers); users have no direct write access to the workflow tables | Atomic, testable, cannot be bypassed from the browser | Functions must be hardened (fixed `search_path`, role checks, locked permissions); see `DATA_MODEL.md` 8.4 | DECIDED |
 | 10 | The review service exposes only four endpoints: start review, import text, lint kit, health. Everything else is direct Supabase | Smallest Python surface to build, test and defend | | DECIDED |
 | 11 | Partial results: if the model fails, the review still finishes with deterministic findings (`llm_status = failed`) | The demo survives a model outage or quota error | Submission is blocked until a review with a working model run exists | DECIDED |
 | 12 | Decisions and applying them are separate: `record_decision`, then `apply_decisions` builds one new revision on the server | One re-review per batch (fewer model calls); the client cannot tamper with revision text | Overlapping or stale suggestions are skipped and reported | DECIDED |
-| 13 | One shared citation validator runs on every candidate finding, and the review service writes results through one atomic service-only database function | A finding can only reach the database if it cites a real rule or fact and a real quote; a review is never half-written | The validator is the critical component and gets the heaviest testing (`REVIEW_ENGINE.md` section 7) | PROPOSED |
+| 13 | One shared citation validator runs on every candidate finding, and the review service writes results through one atomic service-only database function | A finding can only reach the database if it cites a real rule or fact and a real quote; a review is never half-written | The validator is the critical component and gets the heaviest testing (`REVIEW_ENGINE.md` section 7) | DECIDED |
+
+**Decision 6 clarification:** The following are **decided**:
+- Provider-adapter architecture (the LLM sits behind an adapter interface).
+- Candidate provider strategy for the provider spike: Gemini on the free tier, with Groq as a configured alternative.
+
+The following are **not decided** and remain subject to the provider spike (`REVIEW_ENGINE.md` section 3):
+- Exact provider selection.
+- Exact model identifier.
+- SDK choice.
+- Quota and free-tier suitability.
 
 Decision 8 lets day 1 end with a validated, cited finding without any LLM call, as promised in the Round 1 plan.
 
@@ -168,8 +180,16 @@ One branch per slice. A short pull request to self with a checklist: matches sco
 **Cut order if behind:** Tier 3 first (model-assisted rule extraction, realtime polish, UI polish), then PDF/DOCX import, then insights polish. Never cut deployment or the demo.
 
 ## 9. Open decisions
+
+**Remaining implementation/provider choices (subject to provider spike):**
+- Exact provider selection (Gemini vs. Groq).
+- Exact model identifier.
+- SDK choice.
+- Quota and free-tier suitability.
+
+**Open project-planning / acceptance questions (not yet explicitly approved):**
 - Confirmation of the Phase 1 acceptance scenario and slice hours.
-- Gemini model, API style and real rate limits (settled at the provider spike, `REVIEW_ENGINE.md` section 3).
+- Exact 32-hour slice plan budget.
 
 ## 10. Review checklist (for the architect)
 - [ ] Does the acceptance scenario capture what judges should see?
