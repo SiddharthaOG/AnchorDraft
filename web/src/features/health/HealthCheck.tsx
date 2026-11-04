@@ -1,18 +1,11 @@
 import { useEffect, useState } from 'react'
-
-interface HealthResponse {
-  status: string
-  version: string
-  time: string
-}
+import { fetchHealth, HealthError, HealthResponse } from '../../lib/health'
 
 interface HealthState {
   data: HealthResponse | null
   error: string | null
   loading: boolean
 }
-
-const ENGINE_URL = import.meta.env.VITE_ENGINE_URL || 'http://localhost:8000'
 
 export function HealthCheck() {
   const [state, setState] = useState<HealthState>({
@@ -24,38 +17,23 @@ export function HealthCheck() {
   useEffect(() => {
     let mounted = true
 
-    async function fetchHealth() {
+    async function loadHealth() {
       try {
-        const response = await fetch(`${ENGINE_URL}/v1/health`, {
-          headers: {
-            'X-Request-Id': crypto.randomUUID(),
-          },
-        })
-
+        const data = await fetchHealth()
         if (!mounted) return
-
-        if (!response.ok) {
-          setState({
-            data: null,
-            error: `Health check failed: ${response.status} ${response.statusText}`,
-            loading: false,
-          })
-          return
-        }
-
-        const data = (await response.json()) as HealthResponse
         setState({ data, error: null, loading: false })
-      } catch (err) {
+      } catch (err: unknown) {
         if (!mounted) return
-        setState({
-          data: null,
-          error: err instanceof Error ? err.message : 'Unknown error',
-          loading: false,
-        })
+        const message = err instanceof HealthError
+          ? `${err.message}${err.status ? ` (${err.status})` : ''}`
+          : err instanceof Error
+            ? err.message
+            : 'Unknown error'
+        setState({ data: null, error: message, loading: false })
       }
     }
 
-    fetchHealth()
+    loadHealth()
 
     return () => {
       mounted = false
@@ -77,9 +55,6 @@ export function HealthCheck() {
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
           <h2 className="text-red-800 font-semibold mb-2">Health Check Failed</h2>
           <p className="text-red-700">{state.error}</p>
-          <p className="text-red-600 text-sm mt-2">
-            Engine URL: {ENGINE_URL}/v1/health
-          </p>
         </div>
       </div>
     )

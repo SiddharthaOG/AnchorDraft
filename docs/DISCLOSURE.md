@@ -28,6 +28,7 @@ This file records all libraries, services, templates, and reused material used i
 | tailwindcss | 4.3.4 | MIT | CSS framework |
 | typescript | 7.0.2 | Apache-2.0 | Type system |
 | vitest | 3.1.1 | MIT | Testing framework |
+| jsdom | 30.1.3 | MIT | DOM environment for Vitest (peer dep) |
 
 ## Services
 
