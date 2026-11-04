@@ -123,3 +123,70 @@ class TestCORS:
         assert response.headers.get("access-control-allow-origin") != "http://evil.com"
         # May not have the header at all, or may be a different value
         # but definitely not the evil.com origin
+
+
+class TestCORSCommaSeparated:
+    """Tests for CORS configuration with comma-separated ALLOWED_ORIGINS."""
+
+    def test_cors_middleware_configured_with_comma_separated(self, app_comma_separated):
+        """CORS middleware is configured with comma-separated origins."""
+        cors_middleware = None
+        for middleware in app_comma_separated.user_middleware:
+            if middleware.cls == CORSMiddleware:
+                cors_middleware = middleware
+                break
+
+        assert cors_middleware is not None, "CORS middleware not found"
+        options = cors_middleware.kwargs
+        assert options.get("allow_origins") == ["http://localhost:5173", "http://localhost:3000"]
+        assert "*" not in options.get("allow_origins", []), "Wildcard not allowed in CORS origins"
+
+    @pytest.mark.asyncio
+    async def test_cors_allows_configured_origin(self, client_comma_separated):
+        """CORS allows origins from comma-separated ALLOWED_ORIGINS on actual requests."""
+        response = await client_comma_separated.get(
+            "/v1/health",
+            headers={"Origin": "http://localhost:5173"},
+        )
+        assert response.status_code == 200
+        assert response.headers.get("vary") == "Origin"
+        assert response.headers.get("access-control-allow-credentials") == "true"
+
+    @pytest.mark.asyncio
+    async def test_cors_rejects_disallowed_origin(self, client_comma_separated):
+        """CORS rejects origins not in comma-separated ALLOWED_ORIGINS (no wildcard)."""
+        response = await client_comma_separated.get(
+            "/v1/health",
+            headers={"Origin": "http://evil.com"},
+        )
+        assert "access-control-allow-origin" not in response.headers or \
+               response.headers.get("access-control-allow-origin") != "http://evil.com"
+
+    @pytest.mark.asyncio
+    async def test_cors_preflight_allowed_origin_with_x_request_id(self, client_comma_separated):
+        """CORS preflight with allowed origin and X-Request-Id header is accepted."""
+        response = await client_comma_separated.options(
+            "/v1/health",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "x-request-id",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
+        assert response.headers.get("access-control-allow-credentials") == "true"
+        assert "x-request-id" in response.headers.get("access-control-allow-headers", "").lower()
+
+    @pytest.mark.asyncio
+    async def test_cors_preflight_disallowed_origin_rejected(self, client_comma_separated):
+        """CORS preflight from disallowed origin is rejected."""
+        response = await client_comma_separated.options(
+            "/v1/health",
+            headers={
+                "Origin": "http://evil.com",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "x-request-id",
+            },
+        )
+        assert response.headers.get("access-control-allow-origin") != "http://evil.com"

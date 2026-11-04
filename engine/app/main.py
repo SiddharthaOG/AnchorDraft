@@ -26,7 +26,7 @@ def create_app() -> FastAPI:
     # CORS middleware - no wildcard, origins from ALLOWED_ORIGINS
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.ALLOWED_ORIGINS,
+        allow_origins=settings.ALLOWED_ORIGINS_LIST,
         allow_credentials=True,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["X-Request-Id", "Authorization", "Content-Type"],
