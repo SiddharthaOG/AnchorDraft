@@ -77,7 +77,7 @@ npm run test
 1. Create a new Web Service on Render
 2. Connect this repository
 3. Set root directory to `engine/`
-4. **Python version**: Render's docs state "Set your service's `PYTHON_VERSION` environment variable to a fully qualified Python version (e.g., `3.13.5`). You can specify any released version from `3.7.3` onward" ([docs](https://render.com/docs/python-version)). The `.python-version` file is read from the repo root, but since the service root is `engine/`, set the Render environment variable `PYTHON_VERSION=3.12.10` (the `.python-version` file in `engine/` is for local tooling only).
+4. **Python version**: Render's docs state: "Set your service's `PYTHON_VERSION` environment variable to a fully qualified Python version (e.g., `3.13.5`). You can specify any released version from `3.7.3` onward" ([docs](https://render.com/docs/python-version)). **Reasoning**: The `.python-version` file is read from the repo root, but since the service root is `engine/`, set the Render environment variable `PYTHON_VERSION=3.12.10`.
 5. Build command: `pip install -e .` (runtime deps only, no test extras)
 6. Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 7. Add environment variables from `engine/.env.example`:
