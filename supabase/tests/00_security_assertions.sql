@@ -126,7 +126,7 @@ BEGIN
             RAISE EXCEPTION 'Unexpected INSERT RLS policy on % (should not exist)', v_table;
         END IF;
     END LOOP;
-    
+
     -- Verify authenticated role has no direct INSERT privilege on protected tables
     FOR v_table IN SELECT unnest(ARRAY['contents','revisions','reviews','findings',
                                         'decisions','approvals','audit_log']) LOOP
@@ -138,7 +138,7 @@ BEGIN
             RAISE EXCEPTION 'authenticated still has INSERT on % (should be revoked)', v_table;
         END IF;
     END LOOP;
-    
+
     RAISE NOTICE 'PASS: No INSERT RLS policies and no direct INSERT grants on protected tables';
 END $$;
 
@@ -155,31 +155,31 @@ DECLARE
 BEGIN
     -- Create two orgs and add existing users as members
     INSERT INTO public.organizations (id, name) VALUES (v_org_a, 'Org A'), (v_org_b, 'Org B');
-    INSERT INTO public.memberships (org_id, user_id, roles) VALUES 
-        (v_org_a, v_user_a, '{creator}'), 
+    INSERT INTO public.memberships (org_id, user_id, roles) VALUES
+        (v_org_a, v_user_a, '{creator}'),
         (v_org_b, v_user_b, '{creator}');
-    
+
     -- Verify membership logic: user_a is member of org_a only, user_b of org_b only
     IF NOT EXISTS (SELECT 1 FROM public.memberships WHERE org_id = v_org_a AND user_id = '39fc3ba6-60c9-4252-8212-ffb55b7299e5') THEN
         RAISE EXCEPTION 'User A should be member of Org A';
     END IF;
-    
+
     IF EXISTS (SELECT 1 FROM public.memberships WHERE org_id = v_org_b AND user_id = '39fc3ba6-60c9-4252-8212-ffb55b7299e5') THEN
         RAISE EXCEPTION 'User A should not be member of Org B';
     END IF;
-    
+
     IF NOT EXISTS (SELECT 1 FROM public.memberships WHERE org_id = v_org_b AND user_id = 'c6d9c3b6-e175-412c-bfd2-2299886bf349') THEN
         RAISE EXCEPTION 'User B should be member of Org B';
     END IF;
-    
+
     IF EXISTS (SELECT 1 FROM public.memberships WHERE org_id = v_org_a AND user_id = 'c6d9c3b6-e175-412c-bfd2-2299886bf349') THEN
         RAISE EXCEPTION 'User B should not be member of Org A';
     END IF;
-    
+
     -- Cleanup
     DELETE FROM public.memberships WHERE org_id IN (v_org_a, v_org_b);
     DELETE FROM public.organizations WHERE id IN (v_org_a, v_org_b);
-    
+
     RAISE NOTICE 'PASS: Cross-organization isolation membership logic verified';
 END $$;
 
@@ -193,7 +193,7 @@ DECLARE
 BEGIN
     -- Get the existing brand kit
     SELECT id INTO v_kit FROM public.brand_kits WHERE org_id = '11111111-1111-1111-1111-111111111111' AND status = 'active' LIMIT 1;
-    
+
     -- Verify RLS policy on rules: owner can write on draft kit (ALL policy)
     -- Check that RLS policy exists for rules write by owner on draft kit
     IF NOT EXISTS (
@@ -203,7 +203,7 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Missing owner WRITE RLS policy on rules';
     END IF;
-    
+
     -- Verify that policy checks for draft status
     IF NOT EXISTS (
         SELECT 1 FROM pg_policies
@@ -212,7 +212,7 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Missing draft status check in rules WRITE policy';
     END IF;
-    
+
     RAISE NOTICE 'PASS: Role restrictions verified via RLS policy inspection';
 END $$;
 
@@ -230,35 +230,35 @@ BEGIN
     IF v_fn_oid IS NULL THEN
         RAISE EXCEPTION 'submit_content function not found';
     END IF;
-    
+
     -- Verify submit_content has correct signature (content_id uuid -> void)
     SELECT pg_get_function_arguments(v_fn_oid) INTO v_arg_types;
     IF v_arg_types <> '_content_id uuid' THEN
         RAISE EXCEPTION 'submit_content has unexpected signature: %', v_arg_types;
     END IF;
-    
+
     -- Verify approve_content has correct signature
     SELECT oid INTO v_fn_oid FROM pg_proc WHERE proname = 'approve_content' AND pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public');
     IF v_fn_oid IS NULL THEN
         RAISE EXCEPTION 'approve_content function not found';
     END IF;
-    
+
     SELECT pg_get_function_arguments(v_fn_oid) INTO v_arg_types;
     IF v_arg_types <> '_content_id uuid' THEN
         RAISE EXCEPTION 'approve_content has unexpected signature: %', v_arg_types;
     END IF;
-    
+
     -- Verify request_changes has correct signature
     SELECT oid INTO v_fn_oid FROM pg_proc WHERE proname = 'request_changes' AND pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public');
     IF v_fn_oid IS NULL THEN
         RAISE EXCEPTION 'request_changes function not found';
     END IF;
-    
+
     SELECT pg_get_function_arguments(v_fn_oid) INTO v_arg_types;
     IF v_arg_types <> '_content_id uuid, _note text' THEN
         RAISE EXCEPTION 'request_changes has unexpected signature: %', v_arg_types;
     END IF;
-    
+
     RAISE NOTICE 'PASS: Workflow function signatures verified';
 END $$;
 
@@ -276,7 +276,7 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'authenticated has UPDATE on revisions (should be revoked)';
     END IF;
-    
+
     -- Test: Direct DELETE on revision blocked
     IF EXISTS (
         SELECT 1 FROM information_schema.table_privileges
@@ -285,7 +285,7 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'authenticated has DELETE on revisions (should be revoked)';
     END IF;
-    
+
     -- Test: Direct INSERT on revision blocked
     IF EXISTS (
         SELECT 1 FROM information_schema.table_privileges
@@ -294,11 +294,11 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'authenticated has INSERT on revisions (should be revoked)';
     END IF;
-    
+
     -- Verify create_revision function signature
     IF EXISTS (
-        SELECT 1 FROM pg_proc 
-        WHERE proname = 'create_revision' 
+        SELECT 1 FROM pg_proc
+        WHERE proname = 'create_revision'
         AND pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
         AND pg_get_function_arguments(oid) = '_content_id uuid, _body text'
     ) THEN
@@ -322,12 +322,12 @@ BEGIN
     IF v_fn_oid IS NULL THEN
         RAISE EXCEPTION 'submit_content function not found';
     END IF;
-    
+
     SELECT pg_get_function_arguments(v_fn_oid) INTO v_arg_types;
     IF v_arg_types <> '_content_id uuid' THEN
         RAISE EXCEPTION 'submit_content has unexpected signature: %', v_arg_types;
     END IF;
-    
+
     RAISE NOTICE 'PASS: submit_content function signature verified (atomic rollback logic in function body)';
 END $$;
 
@@ -345,24 +345,24 @@ BEGIN
     IF v_fn_oid IS NULL THEN
         RAISE EXCEPTION 'record_decision function not found';
     END IF;
-    
+
     SELECT pg_get_function_arguments(v_fn_oid) INTO v_arg_types;
     -- Note: pg_get_function_arguments includes default values
     IF v_arg_types NOT LIKE '_finding_id uuid, _action decision_action, _reason text%' THEN
         RAISE EXCEPTION 'record_decision has unexpected signature: %', v_arg_types;
     END IF;
-    
+
     -- Verify apply_decisions function signature
     SELECT oid INTO v_fn_oid FROM pg_proc WHERE proname = 'apply_decisions' AND pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public');
     IF v_fn_oid IS NULL THEN
         RAISE EXCEPTION 'apply_decisions function not found';
     END IF;
-    
+
     SELECT pg_get_function_arguments(v_fn_oid) INTO v_arg_types;
     IF v_arg_types <> '_content_id uuid' THEN
         RAISE EXCEPTION 'apply_decisions has unexpected signature: %', v_arg_types;
     END IF;
-    
+
     RAISE NOTICE 'PASS: Decision function signatures verified (latest-wins logic in function body)';
 END $$;
 
