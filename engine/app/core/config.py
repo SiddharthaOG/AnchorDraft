@@ -43,6 +43,28 @@ class Settings(BaseSettings):
     # Store as string to avoid pydantic's JSON parsing of env vars
     ALLOWED_ORIGINS: str = ""
 
+    # Supabase configuration
+    SUPABASE_URL: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
+    SUPABASE_JWKS_URL: str = ""
+    SUPABASE_ISSUER: str = ""
+    SUPABASE_AUDIENCE: str = "authenticated"
+
+    # Database configuration
+    DATABASE_URL: str = ""
+
+    # Rate limits and caps
+    DAILY_REVIEW_CAP: int = 20
+    PER_USER_RATE_LIMIT: int = 10
+    REVISION_BODY_MAX_CHARS: int = 20000
+    COMMENT_MAX_CHARS: int = 2000
+    UPLOAD_MAX_MB: int = 5
+    UPLOAD_MAX_PAGES: int = 20
+    REQUEST_BODY_MAX_MB: int = 6
+
+    # Engine version for review tracking
+    ENGINE_VERSION: str = "0.1.0"
+
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
     def _ensure_string(cls, value: Any) -> str:
