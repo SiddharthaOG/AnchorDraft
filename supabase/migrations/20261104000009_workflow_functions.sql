@@ -172,6 +172,7 @@ language plpgsql security definer set search_path = ''
 as $$
 declare
     _uid uuid := (select auth.uid());
+    _decision_id uuid;
     _org uuid;
     _finding_org uuid;
     _review_id uuid;
@@ -215,6 +216,7 @@ begin
     select r.id into _latest_review_id
     from public.reviews r
     join public.revisions rv on rv.id = r.revision_id
+    join public.v_latest_revision vlr on vlr.revision_id = rv.id
     where rv.content_id = _content_id
       and r.status = 'done'
       and r.llm_status in ('ok', 'skipped')
@@ -222,7 +224,7 @@ begin
     limit 1;
 
     if _latest_review_id is null or _latest_review_id <> _review_id then
-        raise exception 'conflict:not_latest_review';
+        raise exception 'conflict:not_latest_revision';
     end if;
 
     -- 6. Validate action-specific requirements
@@ -254,14 +256,14 @@ begin
     -- 7. Insert decision
     insert into public.decisions (org_id, finding_id, user_id, action, reason, edited_text)
     values (_org, _finding_id, _uid, _action, _reason, _edited_text)
-    returning id into _uid; -- reuse _uid variable for decision_id
+    returning id into _decision_id;
 
     -- 8. Audit log
     insert into public.audit_log (org_id, actor_id, action, entity_type, entity_id, detail)
-    values (_org, (select auth.uid()), 'decision.recorded', 'decision', _uid, jsonb_build_object('finding_id', _finding_id, 'action', _action));
+    values (_org, _uid, 'decision.recorded', 'decision', _decision_id, jsonb_build_object('finding_id', _finding_id, 'action', _action));
 
     -- 9. Return
-    return query select _uid;
+    return query select _decision_id;
 end $$;
 
 revoke all on function public.record_decision(uuid,public.decision_action,text,text) from public, anon;
@@ -293,7 +295,8 @@ declare
     _quote_start int;
     _quote_end int;
     _replacement_text text;
-    _found boolean;
+    _applied_decision_ids uuid[] := '{}';
+    _covered_ranges int4range[] := '{}';
 begin
     -- 1. Authenticate
     if _uid is null then
@@ -320,11 +323,12 @@ begin
         raise exception 'conflict:not_editable';
     end if;
 
-    -- 5. Get latest revision and its review
+    -- 5. Get latest revision and its review (enforce latest revision via v_latest_revision)
     select r.id, r.revision_id
     into _latest_review_id, _latest_revision_id
     from public.reviews r
     join public.revisions rv on rv.id = r.revision_id
+    join public.v_latest_revision vlr on vlr.revision_id = rv.id
     where rv.content_id = _content_id
       and r.status = 'done'
       and r.llm_status in ('ok', 'skipped')
@@ -342,49 +346,108 @@ begin
 
     _new_body := _latest_body;
 
-    -- 7. Collect pending accepted/edited decisions from latest review
+    -- 7. Collect pending decisions from latest review
+    -- Use DISTINCT ON to get only the latest decision per finding (ordered by created_at DESC, id DESC)
+    -- Then filter to only accept/edit decisions that haven't been applied
     -- Order by start_offset DESC so we apply from end to beginning (offsets stay valid)
     for _decision_record in
-        select d.id as decision_id, d.action, d.edited_text, f.quote, f.start_offset, f.end_offset, f.suggestion
-        from public.decisions d
+        select d.id as decision_id,
+               d.action,
+               d.edited_text,
+               f.quote,
+               f.start_offset,
+               f.end_offset,
+               f.suggestion,
+               f.id as finding_id
+        from (
+            select distinct on (d.finding_id) d.id, d.action, d.edited_text, d.finding_id
+            from public.decisions d
+            join public.findings f on f.id = d.finding_id
+            where f.review_id = _latest_review_id
+              and d.resulting_revision_id is null
+              and d.user_id = _uid
+            order by d.finding_id, d.created_at desc, d.id desc
+        ) d
         join public.findings f on f.id = d.finding_id
-        where f.review_id = _latest_review_id
-          and d.action in ('accept', 'edit')
-          and d.resulting_revision_id is null
-          and d.user_id = _uid
+        where d.action in ('accept', 'edit')
         order by f.start_offset desc
     loop
-        -- Verify quote still matches at the current offsets
         _quote_start := _decision_record.start_offset;
         _quote_end := _decision_record.end_offset;
 
-        if _quote_start < 0 or _quote_end > length(_new_body) or _quote_start >= _quote_end then
-            _skip_record := jsonb_build_object('finding_id', _decision_record.decision_id, 'reason', 'text_changed');
+        -- Validate offset bounds against the current body.
+        if _quote_start < 0
+           or _quote_end > length(_new_body)
+           or _quote_start >= _quote_end then
+
+            _skip_record := jsonb_build_object(
+                'decision_id', _decision_record.decision_id,
+                'finding_id', _decision_record.finding_id,
+                'reason', 'text_changed'
+            );
+
             _skipped := _skipped || _skip_record;
             continue;
         end if;
 
-        if substring(_new_body from _quote_start + 1 for _quote_end - _quote_start) <> _decision_record.quote then
-            _skip_record := jsonb_build_object('finding_id', _decision_record.decision_id, 'reason', 'text_changed');
+        -- Detect overlap BEFORE quote validation.
+        -- Ranges use half-open [start, end) semantics.
+        if exists (
+            select 1
+            from unnest(_covered_ranges) as r
+            where r && int4range(_quote_start, _quote_end, '[)')
+        ) then
+
+            _skip_record := jsonb_build_object(
+                'decision_id', _decision_record.decision_id,
+                'finding_id', _decision_record.finding_id,
+                'reason', 'overlap'
+            );
+
             _skipped := _skipped || _skip_record;
             continue;
         end if;
 
-        -- Check for overlap with already applied changes (since we go backwards, later changes have higher offsets)
-        -- This is implicitly handled by processing in descending offset order
+        -- Validate the original quote at its original offsets.
+        if substring(
+            _new_body
+            from _quote_start + 1
+            for _quote_end - _quote_start
+        ) <> _decision_record.quote then
 
-        -- Determine replacement text
+            _skip_record := jsonb_build_object(
+                'decision_id', _decision_record.decision_id,
+                'finding_id', _decision_record.finding_id,
+                'reason', 'text_changed'
+            );
+
+            _skipped := _skipped || _skip_record;
+            continue;
+        end if;
+
+        -- Determine replacement text.
         if _decision_record.action = 'accept' then
             _replacement_text := _decision_record.suggestion;
-        else -- edit
+        else
             _replacement_text := _decision_record.edited_text;
         end if;
 
-        -- Apply replacement
-        _new_body := substring(_new_body from 1 for _quote_start) || _replacement_text || substring(_new_body from _quote_end + 1);
+        -- Apply replacement using zero-based, half-open offsets.
+        _new_body :=
+            substring(_new_body from 1 for _quote_start)
+            || _replacement_text
+            || substring(_new_body from _quote_end + 1);
 
-        -- Update decision with resulting_revision_id (will be set after insert)
-        -- We'll update after creating the revision
+        -- Track only successfully applied decisions and their ranges.
+        _applied_decision_ids :=
+            array_append(_applied_decision_ids, _decision_record.decision_id);
+
+        _covered_ranges :=
+            array_append(
+                _covered_ranges,
+                int4range(_quote_start, _quote_end, '[)')
+            );
+
         _applied_count := _applied_count + 1;
     end loop;
 
@@ -408,15 +471,11 @@ begin
     values (_content_id, _new_version, _latest_revision_id, _new_body, 'accepted_suggestion', _uid)
     returning id into _new_revision_id;
 
-    -- 12. Update applied decisions with resulting_revision_id
+    -- 12. Update ONLY successfully applied decisions with resulting_revision_id
     update public.decisions d
     set resulting_revision_id = _new_revision_id
-    from public.findings f
-    where d.finding_id = f.id
-      and f.review_id = _latest_review_id
-      and d.action in ('accept', 'edit')
-      and d.resulting_revision_id is null
-      and d.user_id = _uid;
+    from unnest(_applied_decision_ids) as aid(decision_id)
+    where d.id = aid.decision_id;
 
     -- 13. If status was changes_requested, move to draft
     if _status = 'changes_requested' then
@@ -550,7 +609,7 @@ revoke all on function public.submit_content(uuid) from public, anon;
 grant execute on function public.submit_content(uuid) to authenticated;
 
 -- ============================================================
--- 6. request_changes
+-- 5. request_changes
 -- ============================================================
 create or replace function public.request_changes(
     _content_id uuid,
@@ -695,6 +754,7 @@ begin
     select r.id, r.revision_id into _latest_review_id, _latest_revision_id
     from public.reviews r
     join public.revisions rv on rv.id = r.revision_id
+    join public.v_latest_revision vlr on vlr.revision_id = rv.id
     where rv.content_id = _content_id
       and r.status = 'done'
       and r.llm_status in ('ok', 'skipped')
@@ -916,7 +976,7 @@ begin
 
     if _rule_count = 0 then
         raise exception 'conflict:empty_kit';
-    end if;
+    end if.
 
     -- 6. Archive previous active kit
     update public.brand_kits
@@ -970,7 +1030,7 @@ begin
 
     if not found then
         raise exception 'not_found';
-    end if;
+    end if.
 
     -- 2. Update review row
     update public.reviews
@@ -1007,13 +1067,13 @@ begin
                     select id into _fact_id
                     from public.approved_facts
                     where kit_id = _review.kit_id and fact_key = _finding->>'ref_key';
-                end if;
-            end if;
+                end if.
+            end if.
 
             if _rule_id is null and _fact_id is null then
                 -- This should not happen if validator worked, but guard anyway
                 raise exception 'unknown_ref';
-            end if;
+            end if.
 
             insert into public.findings (
                 org_id, review_id, source, rule_id, fact_id, ref_key,
@@ -1036,9 +1096,9 @@ begin
                 case when _finding->>'confidence' is not null then (_finding->>'confidence')::numeric(3,2) end,
                 coalesce((_finding->>'needs_human')::boolean, false),
                 coalesce((_finding->>'needs_reviewer')::boolean, false)
-            );
-        end loop;
-    end if;
+            ).
+        end loop.
+    end if.
 
     -- 4. Audit log (actor_id = null for service-role calls)
     insert into public.audit_log (org_id, actor_id, action, entity_type, entity_id, detail)

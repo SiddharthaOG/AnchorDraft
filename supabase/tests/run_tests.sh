@@ -50,7 +50,8 @@ MANUAL=0
 echo "=== Automated Test Suites ==="
 for test in \
     "supabase/tests/00_security_assertions.sql|Security Assertions|false" \
-    "supabase/tests/01_schema_integrity.sql|Schema Integrity|false"; do
+    "supabase/tests/01_schema_integrity.sql|Schema Integrity|false" \
+    "supabase/tests/03_workflow_integrity.sql|Workflow Integrity|false"; do
 
     IFS='|' read -r file name manual <<< "$test"
 
@@ -66,7 +67,6 @@ echo ""
 echo "=== Manual Test Suites (documented scenarios, not executed) ==="
 for test in \
     "supabase/tests/02_org_isolation_rls.sql|Organization Isolation (manual)" \
-    "supabase/tests/03_workflow_integrity.sql|Workflow Integrity (manual)" \
     "supabase/tests/04_security_atomicity.sql|Security Atomicity (manual)"; do
 
     IFS='|' read -r file name manual <<< "$test"
