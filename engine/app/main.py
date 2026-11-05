@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.core.errors import (
     AppException,
     app_exception_handler,
+    generic_exception_handler,
     map_db_exception,
 )
 from app.store.db import get_db_pool, close_db_pool
@@ -51,7 +52,8 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestIdMiddleware)
 
     # Exception handlers
-    app.add_exception_handler(Exception, map_db_exception)
+    app.add_exception_handler(AppException, app_exception_handler)
+    app.add_exception_handler(Exception, generic_exception_handler)
 
     # Include routers
     app.include_router(health_router, prefix="/v1")

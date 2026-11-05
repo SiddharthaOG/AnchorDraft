@@ -36,8 +36,16 @@ async def health_check(
         except Exception:
             db_healthy = False
 
+        if not db_healthy:
+            # Database unhealthy - should not report overall healthy
+            from fastapi import HTTPException, status
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"error": {"code": "service_unavailable", "message": "Database unavailable"}},
+            )
+
     return HealthResponse(
-        status="ok",
+        status="ok" if db_healthy is not False else "degraded",
         version=request.app.version,
         time=datetime.now(timezone.utc).isoformat(),
         database=db_healthy,

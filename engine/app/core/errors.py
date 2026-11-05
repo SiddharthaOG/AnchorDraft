@@ -2,7 +2,11 @@
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from typing import Optional
+import logging
 from app.models.api import ErrorCode, ConflictReason, APIError, ErrorResponse
+
+
+logger = logging.getLogger(__name__)
 
 
 class AppException(Exception):
@@ -166,6 +170,32 @@ async def app_exception_handler(request: Request, exc: AppException) -> JSONResp
                 message=exc.message,
                 request_id=request_id,
                 retry_after_seconds=exc.retry_after_seconds,
+            )
+        ).model_dump(),
+    )
+
+
+async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Handle unexpected exceptions by first attempting database exception mapping."""
+    request_id = getattr(request.state, "request_id", "")
+
+    # First attempt to map as database exception
+    db_response = map_db_exception(exc, request_id)
+    # If the exception was successfully mapped (not an internal error), return it
+    if db_response.status_code != 500:
+        return db_response
+
+    # Log unexpected exceptions for debugging (no sensitive data)
+    logger.exception("Unhandled exception: %s", type(exc).__name__)
+
+    # Return safe generic error
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content=ErrorResponse(
+            error=APIError(
+                code="internal_error",
+                message="Internal server error",
+                request_id=request_id,
             )
         ).model_dump(),
     )

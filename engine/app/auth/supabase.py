@@ -30,8 +30,8 @@ class SupabaseClient:
     def get_organization(self, org_id: str) -> dict | None:
         """Get organization by ID."""
         client = self._get_client()
-        response = client.table("organizations").select("*").eq("id", org_id).single().execute()
-        return response.data
+        response = client.table("organizations").select("*").eq("id", org_id).execute()
+        return response.data[0] if response.data else None
 
     def get_active_kit(self, org_id: str) -> dict | None:
         """Get the active brand kit for an organization."""
@@ -41,10 +41,9 @@ class SupabaseClient:
             .select("*")
             .eq("org_id", org_id)
             .eq("status", "active")
-            .single()
             .execute()
         )
-        return response.data
+        return response.data[0] if response.data else None
 
     def get_kit_rules(self, kit_id: str) -> list[dict]:
         """Get all rules for a kit."""
@@ -61,14 +60,14 @@ class SupabaseClient:
     def get_revision(self, revision_id: str) -> dict | None:
         """Get a revision by ID."""
         client = self._get_client()
-        response = client.table("revisions").select("*").eq("id", revision_id).single().execute()
-        return response.data
+        response = client.table("revisions").select("*").eq("id", revision_id).execute()
+        return response.data[0] if response.data else None
 
     def get_content(self, content_id: str) -> dict | None:
         """Get content by ID."""
         client = self._get_client()
-        response = client.table("contents").select("*").eq("id", content_id).single().execute()
-        return response.data
+        response = client.table("contents").select("*").eq("id", content_id).execute()
+        return response.data[0] if response.data else None
 
     def create_review(
         self,
