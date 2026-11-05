@@ -92,7 +92,9 @@ class SupabaseClient:
             )
             .execute()
         )
-        return response.data[0] if response.data else None
+        if not response.data:
+            raise RuntimeError("Supabase write succeeded but returned no row")
+        return response.data[0]
 
     def get_latest_review_for_revision(self, revision_id: str) -> dict | None:
         """Get the latest review for a revision."""
@@ -169,7 +171,9 @@ class SupabaseClient:
         response = (
             client.table("reviews").update(update_data).eq("id", review_id).execute()
         )
-        return response.data[0] if response.data else None
+        if not response.data:
+            raise RuntimeError("Supabase write succeeded but returned no row")
+        return response.data[0]
 
 
 # Global client instance

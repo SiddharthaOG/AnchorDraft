@@ -117,9 +117,6 @@ async def extract_text(file: UploadFile) -> tuple[str, int, list[str], bool]:
     return text, pages, warnings, truncated
 
 
-router = APIRouter()
-
-
 @router.post(
     "/imports/text",
     status_code=200,
