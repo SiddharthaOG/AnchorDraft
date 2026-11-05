@@ -45,3 +45,10 @@ supabase/.branches/
 
 # Render
 render.yaml
+
+# TypeScript build artifacts
+*.tsbuildinfo
+
+# Generated Vite config output
+web/vite.config.js
+web/vite.config.d.ts
