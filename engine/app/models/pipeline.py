@@ -49,6 +49,7 @@ class DeterministicFindingCandidate(BaseModel):
     rule_category: str = Field(..., description="Category of the rule")
     severity: str = Field(..., description="Severity level")
     needs_reviewer: bool = Field(default=False, description="Whether reviewer sign-off is needed")
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Confidence score 0.0-1.0")
 
     @field_validator("end_offset")
     @classmethod
@@ -60,7 +61,6 @@ class DeterministicFindingCandidate(BaseModel):
 
     model_config = {
         "extra": "forbid",
-        "str_strip_whitespace": True,
     }
 
 
