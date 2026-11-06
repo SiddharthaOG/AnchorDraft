@@ -15,6 +15,23 @@ from engine.app.llm.fake_provider import (
     create_bad_output_failure,
     create_blocked_failure,
 )
+from engine.app.llm.prompt_builder import (
+    PromptInput,
+    RuleData,
+    FactData,
+    build_provider_request,
+    extract_offered_references,
+    generate_nonce,
+    filter_rules_for_model,
+    filter_valid_facts,
+    render_rules_block,
+    render_facts_block,
+    build_user_content,
+    MAX_DRAFT_CHARS,
+    MAX_KIT_CHARS,
+    MAX_FINDINGS_CAP,
+    OUTPUT_SCHEMA,
+)
 
 __all__ = [
     "Provider",
@@ -25,4 +42,19 @@ __all__ = [
     "create_unavailable_failure",
     "create_bad_output_failure",
     "create_blocked_failure",
+    "PromptInput",
+    "RuleData",
+    "FactData",
+    "build_provider_request",
+    "extract_offered_references",
+    "generate_nonce",
+    "filter_rules_for_model",
+    "filter_valid_facts",
+    "render_rules_block",
+    "render_facts_block",
+    "build_user_content",
+    "MAX_DRAFT_CHARS",
+    "MAX_KIT_CHARS",
+    "MAX_FINDINGS_CAP",
+    "OUTPUT_SCHEMA",
 ]

@@ -195,6 +195,7 @@ Deliberately **simple**, because the provider supports only a subset of JSON Sch
 - Low randomness (temperature 0 to 0.2, ASSUMPTION), a generous output limit, **no tools, no search grounding, no code execution**.
 - One call per review. Streaming is not used.
 - Concurrency across the service: at most 2 simultaneous calls (`API_CONTRACT.md` section 6).
+- **max_findings**: must be between 1 and 25 inclusive (default 25). This aligns with the citation validator's maximum accepted findings cap (§7.3).
 
 ### 6.5 Provider adapter interface
 
