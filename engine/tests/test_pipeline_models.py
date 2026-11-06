@@ -172,7 +172,7 @@ class TestDeterministicFindingCandidate:
                 # missing quote, start_offset, end_offset, etc.
             )
         errors = exc_info.value.errors()
-        required_fields = {"quote", "start_offset", "end_offset", "explanation", 
+        required_fields = {"quote", "start_offset", "end_offset", "explanation",
                           "rule_category", "severity"}
         found_fields = {e["loc"][0] for e in errors}
         assert required_fields.issubset(found_fields)

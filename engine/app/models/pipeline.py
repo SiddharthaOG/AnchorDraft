@@ -118,7 +118,7 @@ class ValidatorOutcome(BaseModel):
     candidate_ref: str  # ref_key of the candidate for identification
     source: Literal["deterministic", "llm"]
     kept: bool
-    drop_reason: Optional[Literal["schema_invalid", "unknown_ref", "ref_mismatch", 
+    drop_reason: Optional[Literal["schema_invalid", "unknown_ref", "ref_mismatch",
                                    "quote_not_found", "duplicate", "too_many"]] = None
     validated_finding: Optional["ValidatedFinding"] = None
 
@@ -134,9 +134,9 @@ class ValidatorOutcome(BaseModel):
                 raise ValueError("validated_finding must be None when kept is False")
             if self.drop_reason is None:
                 raise ValueError("drop_reason must be provided when kept is False")
-            valid_reasons = {"schema_invalid", "unknown_ref", "ref_mismatch", 
+            valid_reasons = {"schema_invalid", "unknown_ref", "ref_mismatch",
                            "quote_not_found", "duplicate", "too_many"}
-            if self.drop_reason not in {"schema_invalid", "unknown_ref", "ref_mismatch", 
+            if self.drop_reason not in {"schema_invalid", "unknown_ref", "ref_mismatch",
                                          "quote_not_found", "duplicate", "too_many"}:
                 raise ValueError(f"Invalid drop reason: {self.drop_reason}")
         return self
@@ -165,7 +165,7 @@ class AggregateValidationResult(BaseModel):
 
     def add_dropped(self, reason: str) -> None:
         """Add a dropped candidate with the given reason."""
-        valid_reasons = {"schema_invalid", "unknown_ref", "ref_mismatch", 
+        valid_reasons = {"schema_invalid", "unknown_ref", "ref_mismatch",
                          "quote_not_found", "duplicate", "too_many"}
         if reason not in valid_reasons:
             raise ValueError(f"Invalid drop reason: {reason}")
