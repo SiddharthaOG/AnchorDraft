@@ -2,7 +2,7 @@
 
 This module provides the provider abstraction and implementations for
 interacting with LLM providers. The FakeProvider is used for testing,
-while real providers (Gemini, Groq) will be implemented later.
+while real providers (Groq, Gemini) are used in production.
 """
 
 from engine.app.llm.provider import Provider
@@ -14,6 +14,26 @@ from engine.app.llm.fake_provider import (
     create_unavailable_failure,
     create_bad_output_failure,
     create_blocked_failure,
+)
+from engine.app.llm.groq_provider import GroqProvider
+from engine.app.llm.gemini_provider import GeminiProvider
+from engine.app.llm.provider_factory import (
+    ProviderType,
+    ProviderSettings,
+    ProviderConfigError,
+    create_provider,
+    create_fallback_provider,
+    get_provider,
+    get_provider_with_fallback,
+    ProviderWithFallback,
+    load_provider_settings,
+)
+from engine.app.llm.token_budget import (
+    estimate_tokens,
+    estimate_request_tokens,
+    check_token_budget,
+    TokenBudgetExceededError,
+    TokenEstimate,
 )
 from engine.app.llm.prompt_builder import (
     PromptInput,
@@ -42,6 +62,22 @@ __all__ = [
     "create_unavailable_failure",
     "create_bad_output_failure",
     "create_blocked_failure",
+    "GroqProvider",
+    "GeminiProvider",
+    "ProviderType",
+    "ProviderSettings",
+    "ProviderConfigError",
+    "create_provider",
+    "create_fallback_provider",
+    "get_provider",
+    "get_provider_with_fallback",
+    "ProviderWithFallback",
+    "load_provider_settings",
+    "estimate_tokens",
+    "estimate_request_tokens",
+    "check_token_budget",
+    "TokenBudgetExceededError",
+    "TokenEstimate",
     "PromptInput",
     "RuleData",
     "FactData",

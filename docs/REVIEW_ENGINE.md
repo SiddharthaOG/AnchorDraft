@@ -48,18 +48,81 @@ OpenRouter's free models were also considered and not recommended: one secondhan
 
 **Decision rule at the provider spike:** read the real limits in both consoles, then choose the provider with more headroom for the call budget in section 11. Keep the other as a configured alternative. On either free tier, use **fictional data only**.
 
-## 3. Provider spike (first 30 minutes of Slice 4)
+### 2.2 Provider Selection Decision (6 Nov 2026)
 
-Before any prompt tuning, the agent and the architect pin the following, from Google's live documentation and the AI Studio page, and record the answers in `docs/ai-log/provider-spike.md`:
+**Selected Provider (Primary):** Groq
+**Selected Model (Primary):** `openai/gpt-oss-120b`
+**Selected Provider (Fallback):** Google Gemini API
+**Selected Model (Fallback):** `gemini-3.8-flash`
+**Date:** 2026-11-06
+**Decision Maker:** Siddhartha
 
-1. Which API style and which SDK and version to use.
-2. Which provider and model: compare Gemini and Groq using your own console limits (section 2.1), and prefer a fast, small model that supports schema-constrained output. Record the exact provider and model name.
-3. The RPM, TPM and RPD limits shown for that model on this project.
-4. The exact parameter names for JSON output and for low-randomness settings in that SDK version.
-5. Whether a safety block can occur, and what the response looks like when it does.
-6. One real call with the schema in section 6, to confirm the response shape.
+**Rationale:**
 
-Until the spike is done, everything is built and tested against the **fake provider**.
+**Groq — Primary**
+- Explicit structured-output / JSON Schema support on GPT-OSS models with `strict: true` (constrained decoding) and `strict: false` (best-effort) modes.
+- OpenAI-compatible API and Python SDK (`groq` package with `AsyncGroq` client).
+- Published free-tier quotas: 30 RPM, 1,000 RPD, 8,000 TPM, 200,000 TPD for GPT-OSS 120B. **Exact limits are organization-specific and must be verified in the Groq console.**
+- GPT-OSS 120B preferred over 20B for nuanced brand-rule interpretation, unsupported-claim detection, and explanation quality.
+- Both GPT-OSS models are potential future benchmark candidates, but 120B is the selected model.
+
+**Gemini — Fallback**
+- Current Gemini Flash model (`gemini-3.8-flash`, released 2026-09-02, GA) with structured-output support.
+- Native Python SDK (`google-genai` ≥ 1.0.0) with Pydantic integration.
+- Independent provider fallback if Groq is unavailable or rate-limited.
+- Free tier available at no cost; exact RPM/RPD quotas are **account/project-dependent** and must be verified in AI Studio console. Do not treat published figures as guaranteed values.
+
+**Free-tier assumptions (both providers):**
+- Use fictional data only on free tiers.
+- Groq free tier: no credit card required; data handling terms UNVERIFIED (check current terms).
+- Gemini free tier: data may be used for model training; billing not required for development.
+- Billing required for production quota increases on both providers.
+
+**Token budget & rate-limit constraints (Slice 4.7 requirement):**
+- Groq free-tier TPM (8,000) is the binding constraint. A maximum-sized request (24,000-character kit + draft) can exceed the per-minute token budget once output tokens are included. **Not every maximum-sized request is feasible on the free tier.**
+- Slice 4.7 must implement token-aware request budgeting and graceful rate-limit handling (retry with `retry_after`, max 1 retry, then fail to deterministic findings).
+
+**Structured output compatibility:**
+- **Groq:** `json_schema` with `strict: true` (constrained decoding) on `openai/gpt-oss-120b`. Requires all properties in `required` array and `additionalProperties: false`. Enum, nullable (`type: ["string", "null"]`), and required are supported. **`minLength` is not enforced by the provider in strict mode; treat minimum string lengths as application-level validation responsibilities (citation validator).**
+- **Gemini:** Full JSON Schema support (enum, nullable, required, minLength) via `google-genai` SDK. Matches `OUTPUT_SCHEMA` in `prompt_builder.py`.
+
+**Python SDK integration approach:**
+- **Groq:** `pip install groq`, `AsyncGroq` client, `chat.completions.create()` with `response_format={"type": "json_schema", "json_schema": {...}}`, timeout parameter, manual retry logic.
+- **Gemini:** `pip install google-genai`, native async `generate_content_async()`, Pydantic response parsing, timeout parameter, configurable retry.
+
+**Timeout & Retry:** 45s timeout per `ProviderRequest.timeout_seconds`. Retry on rate limit (wait `retry_after`, capped at 10s), timeout, unavailable. Max 1 retry. Respects existing 45-second request budget.
+
+**Provider Error Mapping:**
+- `RateLimitedError` ← HTTP 429 / quota exhaustion (use `retry_after` header)
+- `TimeoutError` ← Request timeout / `APITimeoutError`
+- `UnavailableError` ← Connection errors / Provider 5xx (`InternalServerError`, `ServiceUnavailable`)
+- `BadOutputError` ← Invalid JSON / schema violations (`json_validate_failed`, `BadRequestError`)
+- `BlockedError` ← **Safety refusals / blocked output only** (provider-specific safety filter signal). **Do not equate generic `PermissionDeniedError` or authentication/authorization failures with safety blocks.**
+
+**Provider output handling (application-level responsibilities):**
+Provider responses still require: JSON parsing, refusal detection (safety blocks), truncation detection (incomplete output), and full application-level validation via the citation validator. Structured output does not establish factual correctness.
+
+**Fallback Behavior:** On primary provider failure, attempt fallback provider. On any provider failure: `llm_status = failed`, deterministic findings preserved, warning added.
+
+**Official Source Links:**
+- Groq: https://console.groq.com/docs/models, https://console.groq.com/docs/structured-outputs, https://console.groq.com/docs/rate-limits, https://github.com/groq/groq-python
+- Gemini: https://ai.google.dev/gemini-api/docs/models, https://ai.google.dev/gemini-api/docs/structured-output, https://ai.google.dev/gemini-api/docs/rate-limits, https://ai.google.dev/gemini-api/docs/python, https://github.com/googleapis/python-genai
+
+**Remaining live-verification requirements:**
+1. Exact free-tier RPM/TPM/RPD for `openai/gpt-oss-120b` on this organization's Groq console.
+2. Exact free-tier RPM/TPM/RPD for `gemini-3.8-flash` on this project's AI Studio rate-limit page.
+3. Groq data handling terms for free tier.
+4. Live structured-output test with AnchorDraft schema on both providers.
+5. Safety block response shapes on both providers.
+
+## 3. Provider spike (first 30 minutes of Slice 4) — COMPLETED
+
+The provider spike has been completed. The provider decision is finalized in §2.2.
+
+- Primary: Groq `openai/gpt-oss-120b`
+- Fallback: Gemini `gemini-3.8-flash`
+
+Until the production providers are implemented in Slice 4.7, everything is built and tested against the **fake provider**.
 
 ## 4. Pipeline
 
