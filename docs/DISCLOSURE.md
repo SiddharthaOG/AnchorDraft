@@ -47,4 +47,4 @@ This file records all libraries, services, templates, and reused material used i
 
 ## AI Assistance
 
-This project was developed with AI assistance (Nemotron 3 Ultra via OpenCode). All code was reviewed and approved by the human architect.
+This project was developed with AI assistance. All code was reviewed and approved by the human architect.
