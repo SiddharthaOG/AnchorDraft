@@ -587,8 +587,7 @@ const startPolling = useCallback(() => {
     }
 
     return () => stopPolling();
-  }, [latestReview, startPolling, stopPolling]);
-
+}, [latestReview?.status, startPolling, stopPolling]);
   // Cleanup on unmount: invalidate pending review requests and stop polling
   useEffect(() => {
     return () => {
