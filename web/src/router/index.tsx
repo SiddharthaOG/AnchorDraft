@@ -5,6 +5,8 @@ import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom'
 import { useAuth } from '../features/auth/AuthProvider';
 import Layout from '../components/Layout';
 import { CreatorLanding } from '../features/contents/CreatorLanding';
+import { ContentCreate } from '../features/contents/ContentCreate';
+import { ContentDetail } from '../features/contents/ContentDetail';
 import { ManagerLanding } from '../features/approvals/ManagerLanding';
 import { ReviewerLanding } from '../features/findings/ReviewerLanding';
 import { OwnerLanding } from '../features/kits/OwnerLanding';
@@ -207,6 +209,24 @@ export const router = createBrowserRouter([
         element: (
           <RoleRoute allowedRoles={['creator', 'manager', 'reviewer', 'owner']}>
             <CreatorLanding />
+          </RoleRoute>
+        ),
+      },
+      // Content creation
+      {
+        path: 'contents/new',
+        element: (
+          <RoleRoute allowedRoles={['creator', 'manager', 'reviewer', 'owner']}>
+            <ContentCreate />
+          </RoleRoute>
+        ),
+      },
+      // Content detail and workflow
+      {
+        path: 'contents/:contentId',
+        element: (
+          <RoleRoute allowedRoles={['creator', 'manager', 'reviewer', 'owner']}>
+            <ContentDetail />
           </RoleRoute>
         ),
       },

@@ -66,6 +66,7 @@ const {
   cloneKit,
   activateKit,
   lintKit,
+  startReview,
   createRule,
   updateRule,
   deleteRule,
@@ -73,6 +74,7 @@ const {
   updateFact,
   deleteFact,
   KitLintError,
+  ReviewEngineError,
 } = dataModule;
 
 // Get access to the mocked functions for assertions
@@ -454,7 +456,7 @@ describe('Data Access Layer', () => {
       expect(result).toEqual(mockLintResponse);
     });
 
-    it('throws KitLintError on 401', async () => {
+    it('throws ReviewEngineError on 401', async () => {
       mockAuthGetSession.mockResolvedValueOnce({
         data: { session: null },
         error: null,
@@ -466,7 +468,7 @@ describe('Data Access Layer', () => {
       } catch (e) {
         caughtError = e;
       }
-      expect(caughtError).toBeInstanceOf(KitLintError);
+      expect(caughtError).toBeInstanceOf(ReviewEngineError);
       expect(caughtError).toMatchObject({ status: 401 });
     });
 
@@ -911,5 +913,183 @@ describe('Mutation/Lint Race Protection Logic', () => {
     it('returns null when all clear', () => {
       expect(getBlockReason({ ok: true }, 5, 5, 0)).toBeNull();
     });
+  });
+});
+
+describe('startReview', () => {
+  const mockStartReviewResponse = {
+    review_id: 'review-1',
+    status: 'queued' as const,
+    deduplicated: false,
+    kit_id: 'kit-1',
+    kit_version: 1,
+  };
+
+  beforeEach(() => {
+    mockAuthGetSession.mockResolvedValue({ data: { session: { access_token: 'test-token' } }, error: null });
+  });
+
+  it('calls start review endpoint with auth token and returns parsed response', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockStartReviewResponse,
+    });
+
+    const result = await startReview('revision-1');
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/v1/reviews'),
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-token',
+          'Content-Type': 'application/json',
+        }),
+        body: JSON.stringify({ revision_id: 'revision-1' }),
+      })
+    );
+    expect(result).toEqual(mockStartReviewResponse);
+  });
+
+  it('throws ReviewEngineError on 401', async () => {
+    mockAuthGetSession.mockResolvedValueOnce({
+      data: { session: null },
+      error: null,
+    });
+
+    let caughtError: unknown;
+    try {
+      await startReview('revision-1');
+    } catch (e) {
+      caughtError = e;
+    }
+    expect(caughtError).toBeInstanceOf(ReviewEngineError);
+    expect(caughtError).toMatchObject({ status: 401 });
+  });
+
+  it('throws ReviewEngineError on 403', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: { message: 'Forbidden' } }),
+    });
+
+    let caughtError: unknown;
+    try {
+      await startReview('revision-1');
+    } catch (e) {
+      caughtError = e;
+    }
+    expect(caughtError).toBeInstanceOf(ReviewEngineError);
+    expect(caughtError).toMatchObject({ status: 403 });
+  });
+
+  it('throws ReviewEngineError on 404', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: { message: 'Revision not found' } }),
+    });
+
+    let caughtError: unknown;
+    try {
+      await startReview('revision-1');
+    } catch (e) {
+      caughtError = e;
+    }
+    expect(caughtError).toBeInstanceOf(ReviewEngineError);
+    expect(caughtError).toMatchObject({ status: 404 });
+  });
+
+  it('throws ReviewEngineError on 409 conflict', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: { message: 'Content is not editable', reason: 'not_editable' } }),
+    });
+
+    let caughtError: unknown;
+    try {
+      await startReview('revision-1');
+    } catch (e) {
+      caughtError = e;
+    }
+    expect(caughtError).toBeInstanceOf(ReviewEngineError);
+    expect(caughtError).toMatchObject({ status: 409, reason: 'not_editable' });
+  });
+
+  it('throws ReviewEngineError on 429 rate limited', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 429,
+      json: async () => ({ error: { message: 'Daily review cap reached', retry_after_seconds: 3600 } }),
+    });
+
+    let caughtError: unknown;
+    try {
+      await startReview('revision-1');
+    } catch (e) {
+      caughtError = e;
+    }
+    expect(caughtError).toBeInstanceOf(ReviewEngineError);
+    expect(caughtError).toMatchObject({ status: 429, retryAfterSeconds: 3600 });
+  });
+
+  it('throws ReviewEngineError on network error', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('Network error'));
+
+    let caughtError: unknown;
+    try {
+      await startReview('revision-1');
+    } catch (e) {
+      caughtError = e;
+    }
+    expect(caughtError).toBeInstanceOf(ReviewEngineError);
+    expect(caughtError).toMatchObject({ status: 0 });
+  });
+
+  it('throws ReviewEngineError on timeout', async () => {
+    const abortError = new DOMException('Aborted', 'AbortError');
+    mockFetch.mockRejectedValueOnce(abortError);
+
+    let caughtError: unknown;
+    try {
+      await startReview('revision-1');
+    } catch (e) {
+      caughtError = e;
+    }
+    expect(caughtError).toBeInstanceOf(ReviewEngineError);
+    expect(caughtError).toMatchObject({ status: 504 });
+  });
+
+  it('throws ReviewEngineError on invalid response shape', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ invalid: 'shape' }),
+    });
+
+    let caughtError: unknown;
+    try {
+      await startReview('revision-1');
+    } catch (e) {
+      caughtError = e;
+    }
+    expect(caughtError).toBeInstanceOf(ReviewEngineError);
+    expect(caughtError).toMatchObject({ status: 500 });
+  });
+
+  it('handles deduplicated response', async () => {
+    const deduplicatedResponse = {
+      ...mockStartReviewResponse,
+      deduplicated: true,
+      status: 'done' as const,
+    };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => deduplicatedResponse,
+    });
+
+    const result = await startReview('revision-1');
+    expect(result).toEqual(deduplicatedResponse);
   });
 });

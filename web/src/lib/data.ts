@@ -584,6 +584,92 @@ export async function activateKit(kitId: string): Promise<void> {
 }
 
 // ============================================================
+// Review engine API client
+// ============================================================
+
+export interface StartReviewRequest {
+  revision_id: string;
+}
+
+export interface StartReviewResponse {
+  review_id: string;
+  status: 'queued' | 'running' | 'done' | 'failed';
+  deduplicated: boolean;
+  kit_id: string;
+  kit_version: number;
+}
+
+export class ReviewEngineError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly originalError?: Error,
+    public readonly reason?: string,
+    public readonly retryAfterSeconds?: number,
+  ) {
+    super(message);
+    this.name = 'ReviewEngineError';
+  }
+}
+
+export async function startReview(revisionId: string): Promise<StartReviewResponse> {
+  const token = await getAuthToken();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 90000);
+
+  try {
+    const response = await fetch(`${getEngineUrl()}/v1/reviews`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-Request-Id': crypto.randomUUID(),
+      },
+      body: JSON.stringify({ revision_id: revisionId }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const message = errorData.error?.message || `Review start failed: ${response.status} ${response.statusText}`;
+      const reason = errorData.error?.reason;
+      const retryAfter = errorData.error?.retry_after_seconds;
+      throw new ReviewEngineError(message, response.status, undefined, reason, retryAfter);
+    }
+
+    const data = (await response.json()) as StartReviewResponse;
+
+    // Validate response shape
+    if (!data.review_id || !data.status || typeof data.deduplicated !== 'boolean' || !data.kit_id || typeof data.kit_version !== 'number') {
+      throw new ReviewEngineError('Invalid review start response shape', 500);
+    }
+
+    return data;
+  } catch (err) {
+    if (err instanceof ReviewEngineError) throw err;
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new ReviewEngineError('Review start timeout after 90s', 504, err);
+    }
+    throw new ReviewEngineError(
+      err instanceof Error ? err.message : 'Network error',
+      0,
+      err instanceof Error ? err : undefined,
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// Shared auth token getter for engine API calls
+async function getAuthToken(): Promise<string> {
+  const { data, error } = await supabase.auth.getSession();
+  if (error || !data?.session?.access_token) {
+    throw new ReviewEngineError('No valid session', 401);
+  }
+  return data.session.access_token;
+}
+
+// ============================================================
 // Kit lint API client
 // ============================================================
 
@@ -632,14 +718,6 @@ function getEngineUrl(): string {
     return 'http://localhost:8000';
   }
   return url;
-}
-
-async function getAuthToken(): Promise<string> {
-  const { data, error } = await supabase.auth.getSession();
-  if (error || !data?.session?.access_token) {
-    throw new KitLintError('No valid session', 401);
-  }
-  return data.session.access_token;
 }
 
 export async function lintKit(kitId: string): Promise<KitLintResponse> {
