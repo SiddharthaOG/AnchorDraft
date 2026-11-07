@@ -65,6 +65,23 @@ class Settings(BaseSettings):
     # Engine version for review tracking
     ENGINE_VERSION: str = "0.1.0"
 
+    # LLM Provider Configuration
+    LLM_PROVIDER: str = "fake"
+    LLM_FALLBACK_PROVIDER: str = "gemini"
+    LLM_FALLBACK_ENABLED: bool = True
+
+    # Groq settings
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
+    GROQ_TPM_LIMIT: int = 8000
+    GROQ_RPM_LIMIT: int = 30
+
+    # Gemini settings
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-3.8-flash"
+    GEMINI_TPM_LIMIT: int = 250000
+    GEMINI_RPM_LIMIT: int = 15
+
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
     def _ensure_string(cls, value: Any) -> str:

@@ -1,9 +1,10 @@
 """Reviews API endpoints."""
 import hashlib
 import time
+import uuid
 from collections import defaultdict
 from uuid import UUID
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 from fastapi.responses import JSONResponse
 
 from app.auth.dependencies import (
@@ -30,6 +31,7 @@ from app.models.api import (
     ErrorCode,
 )
 from app.store.db import get_db_pool
+from app.pipeline import run_review_pipeline
 
 router = APIRouter()
 
@@ -69,6 +71,7 @@ def _check_user_rate_limit(user_id: str, limit: int, window_seconds: int) -> tup
     },
 )
 async def start_review(
+    background_tasks: BackgroundTasks,
     request: Request,
     payload: ReviewStartRequest,
     user: AuthUser = Depends(require_creator),
@@ -143,7 +146,7 @@ async def start_review(
             # 2. Look up existing queued/running review
             existing_queued = await conn.fetchrow(
                 """
-                SELECT id, status, kit_id FROM reviews
+                SELECT id, status, kit_id, claim_token, started_at FROM reviews
                 WHERE revision_id = $1
                   AND status IN ('queued', 'running')
                 ORDER BY created_at DESC
@@ -152,6 +155,29 @@ async def start_review(
                 revision_id,
             )
             if existing_queued:
+                # If the review was previously running (reclaimed), schedule it again
+                is_reclaimed = existing_queued["status"] == "queued" and existing_queued["claim_token"] is None and existing_queued["started_at"] is not None
+                if is_reclaimed:
+                    # Schedule the pipeline for the reclaimed review
+                    background_tasks.add_task(run_review_pipeline, str(existing_queued["id"]))
+                    # Update status to running and generate new claim_token
+                    claim_token = uuid.uuid4()
+                    await conn.execute(
+                        """
+                        UPDATE reviews
+                        SET status = 'running', started_at = now(), claim_token = $1, claimed_at = now()
+                        WHERE id = $2
+                        """,
+                        claim_token,
+                        existing_queued["id"],
+                    )
+                    return ReviewStartResponse(
+                        review_id=UUID(existing_queued["id"]),
+                        status="running",
+                        deduplicated=False,  # Not deduplicated - we're re-running
+                        kit_id=UUID(existing_queued["kit_id"]),
+                        kit_version=kit["version"],
+                    )
                 return ReviewStartResponse(
                     review_id=UUID(existing_queued["id"]),
                     status=existing_queued["status"],
@@ -235,6 +261,9 @@ async def start_review(
 
             if not review:
                 raise RuntimeError("Failed to create review")
+
+            # Schedule the pipeline as a background task
+            background_tasks.add_task(run_review_pipeline, str(review["id"]))
 
             return ReviewStartResponse(
                 review_id=UUID(review["id"]),
