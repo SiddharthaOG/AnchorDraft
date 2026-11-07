@@ -5,10 +5,10 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../../features/auth/AuthProvider';
 import { LoadingScreen } from '../../components/LoadingScreen';
 import {
-  getContents,
   getContentStats,
-  getPendingSignoffs,
+  getPendingSignoffsByOrg,
   type ContentStats,
+  type PendingSignoff,
 } from '../../lib/data';
 
 interface StatCardProps {
@@ -93,16 +93,7 @@ function EmptyState({ icon: Icon, title, description }: {
 export function ReviewerLanding() {
   const { session, isLoading: authLoading } = useAuth();
   const [stats, setStats] = useState<ContentStats | null>(null);
-  const [pendingSignoffs, setPendingSignoffs] = useState<Array<{
-    content_id: string;
-    finding_id: string;
-    ref_key: string;
-    category: string;
-    severity: string;
-    quote: string;
-    explanation: string;
-    needs_human: boolean;
-  }>>([]);
+  const [pendingSignoffs, setPendingSignoffs] = useState<PendingSignoff[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -123,27 +114,15 @@ export function ReviewerLanding() {
     setError(null);
 
     try {
-      const [allContents, contentStats] = await Promise.all([
-        getContents(orgId, 'submitted'),
+      const [contentStats, allSignoffs] = await Promise.all([
         getContentStats(orgId),
+        getPendingSignoffsByOrg(orgId),
       ]);
 
       // Stale request check
       if (currentRequestId !== requestIdRef.current) return;
 
       setStats(contentStats);
-
-      // Load pending signoffs for each submitted content
-      const signoffsPromises = allContents.map(async c => {
-        const signoffs = await getPendingSignoffs(c.id);
-        return signoffs.map(s => ({ ...s, content_id: c.id }));
-      });
-      const signoffsResults = await Promise.all(signoffsPromises);
-      const allSignoffs = signoffsResults.flat();
-
-      // Stale request check after signoffs fetch
-      if (currentRequestId !== requestIdRef.current) return;
-
       setPendingSignoffs(allSignoffs);
     } catch (err) {
       if (currentRequestId !== requestIdRef.current) return;
@@ -179,7 +158,7 @@ export function ReviewerLanding() {
   }
 
   // Group signoffs by content for display
-  const signoffsByContent = pendingSignoffs.reduce((acc, signoff) => {
+  const signoffsByContent = (Array.isArray(pendingSignoffs) ? pendingSignoffs : []).reduce((acc, signoff) => {
     if (!acc[signoff.content_id]) acc[signoff.content_id] = [];
     acc[signoff.content_id].push(signoff);
     return acc;
@@ -201,7 +180,7 @@ export function ReviewerLanding() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatCard
           label="Pending Sign-offs"
-          value={pendingSignoffs.length}
+          value={(Array.isArray(pendingSignoffs) ? pendingSignoffs : []).length}
           icon={
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -211,7 +190,7 @@ export function ReviewerLanding() {
         />
         <StatCard
           label="Claims to Reject"
-          value={pendingSignoffs.filter(s => s.category === 'claim').length}
+          value={(Array.isArray(pendingSignoffs) ? pendingSignoffs : []).filter(s => s.category === 'claim').length}
           icon={
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -220,7 +199,7 @@ export function ReviewerLanding() {
           href="/review"
         />
         <StatCard
-          label="Completed"
+          label="Approved Content"
           value={stats?.approved || 0}
           icon={
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -230,7 +209,7 @@ export function ReviewerLanding() {
           href="/review"
         />
         <StatCard
-          label="Total Reviews"
+          label="Submitted Content"
           value={stats?.submitted || 0}
           icon={
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -305,11 +284,11 @@ export function ReviewerLanding() {
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-2">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
-                              {signoff.severity === 'high' && 'bg-red-100 text-red-700'}
-                              {signoff.severity === 'medium' && 'bg-yellow-100 text-yellow-700'}
-                              {signoff.severity === 'low' && 'bg-gray-100 text-gray-700'}
-                            ">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
+                              ${signoff.severity === 'high' ? 'bg-red-100 text-red-700' : ''}
+                              ${signoff.severity === 'medium' ? 'bg-yellow-100 text-yellow-700' : ''}
+                              ${signoff.severity === 'low' ? 'bg-gray-100 text-gray-700' : ''}
+                            `}>
                               {signoff.severity}
                             </span>
                             <span className="text-sm font-medium text-gray-900">{signoff.ref_key}</span>

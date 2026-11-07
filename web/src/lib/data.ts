@@ -348,7 +348,7 @@ export async function getFindingsWithDecisionsForReview(reviewId: string): Promi
   return data || [];
 }
 
-export async function getPendingSignoffs(contentId: string): Promise<{
+export async function getPendingSignoffs(contentId: string): Promise<Array<{
   finding_id: string;
   ref_key: string;
   category: string;
@@ -356,11 +356,34 @@ export async function getPendingSignoffs(contentId: string): Promise<{
   quote: string;
   explanation: string;
   needs_human: boolean;
-}[]> {
+}>> {
   const { data, error } = await supabase
     .from('v_pending_signoffs')
     .select('finding_id, ref_key, category, severity, quote, explanation, needs_human')
     .eq('content_id', contentId);
+
+  if (error) {
+    throw new Error(`Failed to fetch pending signoffs: ${error.message}`);
+  }
+  return data || [];
+}
+
+export interface PendingSignoff {
+  finding_id: string;
+  content_id: string;
+  ref_key: string;
+  category: string;
+  severity: string;
+  quote: string;
+  explanation: string;
+  needs_human: boolean;
+}
+
+export async function getPendingSignoffsByOrg(orgId: string): Promise<PendingSignoff[]> {
+  const { data, error } = await supabase
+    .from('v_pending_signoffs')
+    .select('finding_id, content_id, ref_key, category, severity, quote, explanation, needs_human')
+    .eq('org_id', orgId);
 
   if (error) {
     throw new Error(`Failed to fetch pending signoffs: ${error.message}`);

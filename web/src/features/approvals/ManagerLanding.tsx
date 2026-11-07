@@ -7,9 +7,10 @@ import { LoadingScreen } from '../../components/LoadingScreen';
 import {
   getContents,
   getContentStats,
-  getPendingSignoffs,
+  getPendingSignoffsByOrg,
   type Content,
   type ContentStats,
+  type PendingSignoff,
 } from '../../lib/data';
 
 interface StatCardProps {
@@ -95,16 +96,7 @@ export function ManagerLanding() {
   const { session, isLoading: authLoading } = useAuth();
   const [contents, setContents] = useState<Content[]>([]);
   const [stats, setStats] = useState<ContentStats | null>(null);
-  const [pendingSignoffs, setPendingSignoffs] = useState<Array<{
-    content_id: string;
-    finding_id: string;
-    ref_key: string;
-    category: string;
-    severity: string;
-    quote: string;
-    explanation: string;
-    needs_human: boolean;
-  }>>([]);
+  const [pendingSignoffs, setPendingSignoffs] = useState<PendingSignoff[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -126,9 +118,10 @@ export function ManagerLanding() {
     setError(null);
 
     try {
-      const [allContents, contentStats] = await Promise.all([
+      const [allContents, contentStats, allSignoffs] = await Promise.all([
         getContents(orgId, 'submitted'),
         getContentStats(orgId),
+        getPendingSignoffsByOrg(orgId),
       ]);
 
       // Stale request check
@@ -136,18 +129,6 @@ export function ManagerLanding() {
 
       setContents(allContents);
       setStats(contentStats);
-
-      // Load pending signoffs for each submitted content
-      const signoffsPromises = allContents.map(async c => {
-        const signoffs = await getPendingSignoffs(c.id);
-        return signoffs.map(s => ({ ...s, content_id: c.id }));
-      });
-      const signoffsResults = await Promise.all(signoffsPromises);
-      const allSignoffs = signoffsResults.flat();
-
-      // Stale request check after signoffs fetch
-      if (currentRequestId !== requestIdRef.current) return;
-
       setPendingSignoffs(allSignoffs);
     } catch (err) {
       if (currentRequestId !== requestIdRef.current) return;
@@ -208,7 +189,7 @@ export function ManagerLanding() {
         />
         <StatCard
           label="Pending Sign-offs"
-          value={pendingSignoffs.length}
+          value={(Array.isArray(pendingSignoffs) ? pendingSignoffs : []).length}
           icon={
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
