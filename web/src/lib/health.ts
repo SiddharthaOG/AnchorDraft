@@ -26,7 +26,17 @@ export class HealthError extends Error {
 }
 
 function getEngineUrl(): string {
-  return import.meta.env.VITE_ENGINE_URL || 'http://localhost:8000'
+  const url = import.meta.env.VITE_ENGINE_URL
+  if (!url) {
+    const isProduction = import.meta.env.PROD || window.location.hostname !== 'localhost'
+    if (isProduction) {
+      throw new Error(
+        'VITE_ENGINE_URL is not configured. Set VITE_ENGINE_URL environment variable to the engine base URL (e.g., https://anchordraft.onrender.com).'
+      )
+    }
+    return 'http://localhost:8000'
+  }
+  return url
 }
 
 export async function fetchHealth(
