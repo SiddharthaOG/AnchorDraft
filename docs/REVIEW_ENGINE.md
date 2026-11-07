@@ -379,8 +379,40 @@ If the project's real daily cap is very low (one report suggests it can be about
 - **Unicode:** emoji before the quote, combining characters, CRLF input.
 - **Atomicity:** if the write function fails, no findings are stored.
 - **Logging:** a test that fails if any draft, quote or guideline text appears in log output.
+- **Provider fallback & failure classification:** primary success; fallback on rate_limit/timeout/unavailable; NO fallback on blocked/bad_output/config_error; combined error handling; retry_after behavior; no fallback on generic transient messages.
+- **Citation & finding integrity:** reference existence/offered validation; issue-type matching; quote location; server-side offsets; invalid candidate dropping; duplicate handling; 25-finding cap; rule/fact metadata preservation; fact→needs_reviewer; deterministic-before-model processing.
+- **Persistence & claim ownership:** successful completion with claim_token; failure RPC with claim_token; token propagation; NULL token rejection; mismatched token rejection; stale worker fencing.
+- **Recovery scheduling:** stale review reclamation eligibility; configurable lease period (default 30 min); reclaimed review detection.
+- **API integration:** idempotency for queued/running/completed reviews.
 
-## 14. Open questions
+## 14. Test coverage summary (Slice 4.9)
+
+Slice 4.9 adds end-to-end and failure-path tests covering:
+
+| Category | Tests | Verification method |
+|---|---|---|
+| Provider fallback & failure classification | 11 | Unit tests with mocked providers |
+| Citation & finding integrity | 11 | Unit tests with real validator |
+| Persistence & claim ownership | 7 | Unit tests with mocked DB pool |
+| Recovery scheduling | 2 | Unit tests with mocked DB pool |
+| API integration | 3 | Unit tests with mocked DB/Supabase |
+| **Total** | **32** | |
+
+**Skipped integration tests (require real PostgreSQL):**
+- `test_successful_pipeline_orchestration`
+- `test_deterministic_findings_survive_provider_failure`
+- `test_llm_status_and_warning_on_provider_failure`
+- `test_failure_persistence_on_unrecoverable_error`
+
+**Lease duration:** 30-minute default (configured in `reclaim_stale_reviews` SQL and Python).
+
+**Remaining limitations:**
+- Full pipeline integration tests require live PostgreSQL (advisory locks, RPC permissions, transaction semantics).
+- No automatic stale-job reaper — `reclaim_stale_reviews()` must be triggered externally.
+- No lease renewal mechanism — workers must complete within lease period.
+- `test_health.py` has pre-existing fixture issues unrelated to this work.
+
+## 15. Open questions
 
 - **Q1 — Recorded fallback for demos.** An optional provider that replays previously recorded model output for the rehearsed demo drafts, labelled "recorded response" in the interface, could protect the demo from an outage. *Recommendation: not in Tier 1. Rely on partial results; add only if clearly labelled.*
 - **Q2 — Languages.** English only in Round 2. *Keep.*

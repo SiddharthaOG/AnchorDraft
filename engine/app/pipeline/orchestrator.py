@@ -670,7 +670,7 @@ class ReviewOrchestrator:
 # ---------------------------------------------------------------------------
 
 
-async def reclaim_stale_reviews(lease_minutes: int = 10) -> int:
+async def reclaim_stale_reviews(lease_minutes: int = 30) -> int:
     """Reclaim stale running reviews by resetting them to queued.
 
     A review is considered stale if it has been in 'running' status for longer
@@ -678,7 +678,7 @@ async def reclaim_stale_reviews(lease_minutes: int = 10) -> int:
 
     Args:
         lease_minutes: Maximum minutes a review can be in 'running' status before
-            being considered stale. Default 10 minutes.
+            being considered stale. Default 30 minutes.
 
     Returns:
         Number of reviews reclaimed (reset to queued).
