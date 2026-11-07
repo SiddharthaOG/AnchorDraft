@@ -13,12 +13,12 @@ create index if not exists idx_reviews_stale_running
 
 -- 2. Function to reclaim stale running reviews
 -- A running review is stale if:
---   - It has been running for more than the lease period (default 10 minutes)
+--   - It has been running for more than the lease period (default 30 minutes)
 --   - The claim_token is not null (was properly claimed)
 -- This function atomically re-queues stale jobs by:
 --   - Setting status back to 'queued'
 --   - Clearing claim_token and claimed_at
---   - Resetting started_at
+--   - Preserving started_at so that reclaimed reviews can be detected by the API
 -- Returns the number of reclaimed reviews.
 create or replace function public.reclaim_stale_reviews(
     _lease_minutes int default 30
@@ -38,8 +38,7 @@ begin
         claimed_at = null
     where status = 'running'
       and claim_token is not null
-      and claimed_at < _stale_threshold
-    returning id into _reclaimed;
+      and claimed_at < _stale_threshold;
 
     get diagnostics _reclaimed = row_count;
 
@@ -90,16 +89,16 @@ begin
 
     if not found then
         raise exception 'not_found';
-    end if.
+    end if;
 
     -- 2. Validate claim_token (MANDATORY - reject NULL and mismatched tokens)
     if _claim_token is null
        or _review.claim_token is null
        or _review.claim_token <> _claim_token then
         raise exception 'claim_token_mismatch';
-    end if.
+    end if;
 
-    -- 2. Update review row
+    -- 3. Update review row
     update public.reviews
     set status = _status,
         llm_status = _llm_status,
@@ -114,7 +113,7 @@ begin
         claimed_at = null
     where id = _review_id;
 
-    -- 3. If status is done, insert findings
+    -- 4. If status is done, insert findings
     if _status = 'done' then
         for _finding in select * from jsonb_array_elements(_findings)
         loop
@@ -136,13 +135,13 @@ begin
                     select id into _fact_id
                     from public.approved_facts
                     where kit_id = _review.kit_id and fact_key = _finding->>'ref_key';
-                end if.
-            end if.
+                end if;
+            end if;
 
             if _rule_id is null and _fact_id is null then
                 -- This should not happen if validator worked, but guard anyway
                 raise exception 'unknown_ref';
-            end if.
+            end if;
 
             insert into public.findings (
                 org_id, review_id, source, rule_id, fact_id, ref_key,
@@ -165,11 +164,11 @@ begin
                 case when _finding->>'confidence' is not null then (_finding->>'confidence')::numeric(3,2) end,
                 coalesce((_finding->>'needs_human')::boolean, false),
                 coalesce((_finding->>'needs_reviewer')::boolean, false)
-            ).
-        end loop.
-    end if.
+            );
+        end loop;
+    end if;
 
-    -- 4. Audit log (actor_id = null for service-role calls)
+    -- 5. Audit log (actor_id = null for service-role calls)
     insert into public.audit_log (org_id, actor_id, action, entity_type, entity_id, detail)
     values (_review.org_id, null, 'review.completed', 'review', _review_id, jsonb_build_object('status', _status, 'llm_status', _llm_status));
 end $$;
@@ -198,14 +197,14 @@ begin
 
     if not found then
         raise exception 'not_found';
-    end if.
+    end if;
 
     -- Validate claim_token (MANDATORY - reject NULL and mismatched tokens)
     if _claim_token is null
        or _review.claim_token is null
        or _review.claim_token <> _claim_token then
         raise exception 'claim_token_mismatch';
-    end if.
+    end if;
 
     update public.reviews
     set status = 'failed',

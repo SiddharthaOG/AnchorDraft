@@ -1338,32 +1338,37 @@ class TestAPIIntegration:
 
 
 # ============================================================================
-# H. Full Pipeline Orchestration Test (Mocked End-to-End)
+# H. Full Pipeline Orchestration Test (Orchestrator Flow with Mocked Stages)
 # ============================================================================
 
 class TestFullPipelineOrchestration:
-    """Tests for complete Python review pipeline orchestration using mocks.
+    """Tests for Python review pipeline orchestration using mocked stages.
 
-    This test exercises the complete Python review pipeline from data loading
-    through validation and persistence, using the actual orchestration components
-    but mocking external boundaries (database and provider network calls).
+    The orchestration test verifies stage sequencing, result propagation,
+    and claim-token handling. Internal deterministic checks, model analysis,
+    validation, and persistence are mocked in this test.
+
+    The underlying components have separate unit tests. This test does not
+    claim to exercise the complete review engine end-to-end.
     """
 
     @pytest.mark.asyncio
-    async def test_complete_pipeline_with_deterministic_and_model_findings(self):
-        """Test complete pipeline orchestration with both deterministic and model findings.
+    async def test_orchestrator_sequences_stages_and_propagates_claim_token(self):
+        """Verify orchestration sequencing and claim-token propagation.
 
-        This test verifies:
-        - ReviewOrchestrator.run_pipeline() executes the full orchestration path
-        - Data loading, deterministic checks, model analysis, validation, persistence
-        - Both deterministic and model findings reach persistence
-        - Claim token is propagated to completion RPC
-        - Review reaches correct terminal state (llm_status="ok")
-        - Correct metadata preserved on both finding types
+        This test verifies that ReviewOrchestrator.run_pipeline() coordinates
+        the mocked pipeline stages, propagates their results, and passes claim
+        ownership information to the persistence boundary.
+
+        It does not independently test the implementations of the deterministic
+        checker, model/provider analysis, citation validator, or persistence RPC.
         """
-        from engine.app.pipeline.orchestrator import ReviewOrchestrator
+        from engine.app.pipeline.orchestrator import ReviewOrchestrator, PipelineInput
         from engine.app.llm.prompt_builder import PromptInput
         from engine.app.llm.token_budget import TokenBudgetExceededError
+        from engine.app.checks.deterministic import DeterministicCheckResult, SkippedCheck
+        from engine.app.models.pipeline import ModelFindingCandidate
+        from engine.app.validator import AggregateValidationResult
 
         review_id = str(uuid4())
         revision_id = str(uuid4())
@@ -1389,8 +1394,8 @@ class TestFullPipelineOrchestration:
             channel="blog",
             engine_version="0.1.0",
         )
+        # Rules: 2 deterministic (TERM-01, TERM-02), 2 LLM (CLAIM-01, TONE-01)
         mock_loader.load_rules_and_facts.return_value = (
-            # Rules: 2 deterministic, 2 LLM
             [
                 RuleData(
                     rule_key="TERM-01",
@@ -1482,11 +1487,11 @@ class TestFullPipelineOrchestration:
         )
 
         # --- Mock Database Pool (asyncpg connection) ---
-        # The claim_review calls execute twice: 1) pg_advisory_xact_lock, 2) UPDATE reviews
-        # Then persist_results calls execute again
+        # claim_review: pg_advisory_xact_lock + UPDATE reviews
+        # persist_results: SELECT engine_complete_review(...)
         mock_conn = MagicMock()
-        mock_conn.execute = AsyncMock(side_effect=[None, "UPDATE 1", None])  # lock, claim_review UPDATE, persist
-        mock_conn.fetchval = AsyncMock(return_value=1)  # for claim_review
+        mock_conn.execute = AsyncMock(side_effect=[None, "UPDATE 1", None])  # lock, claim UPDATE, persist
+        mock_conn.fetchval = AsyncMock(return_value=1)  # for claim_review UPDATE 1
         mock_conn.fetchrow = AsyncMock(return_value={"id": review_id})
         mock_conn.fetch = AsyncMock(return_value=[])
         mock_conn.transaction = MagicMock(
@@ -1529,8 +1534,7 @@ class TestFullPipelineOrchestration:
             finish_reason="stop",
         ))
 
-        # --- Pre-computed deterministic check results (bypasses RuleData->RuleConfig issue) ---
-        from engine.app.checks.deterministic import DeterministicCheckResult, SkippedCheck
+        # --- Mocked stage outputs ---
         det_result = DeterministicCheckResult(
             candidates=[
                 DeterministicFindingCandidate(
@@ -1557,7 +1561,6 @@ class TestFullPipelineOrchestration:
             skipped_checks=[],
         )
 
-        # --- Pre-computed model analysis results ---
         model_candidates = [
             ModelFindingCandidate(
                 ref_key="CLAIM-01",
@@ -1583,7 +1586,7 @@ class TestFullPipelineOrchestration:
         output_tokens = 200
         model_warnings = []
 
-        # --- Pre-computed validation results ---
+        from engine.app.models.pipeline import ValidatedFinding
         validated_findings = [
             ValidatedFinding(
                 source="deterministic",
@@ -1649,51 +1652,22 @@ class TestFullPipelineOrchestration:
             dropped_counts={},
         )
 
-        # --- Orchestrator with all mocks ---
+        # --- Orchestrator with mocks ---
         orchestrator = ReviewOrchestrator()
         orchestrator.loader = mock_loader
         orchestrator._get_db_pool = AsyncMock(return_value=mock_pool)
         orchestrator.supabase = MagicMock()
 
-        # Patch internal methods to return pre-computed results (bypasses RuleData->RuleConfig conversion issue)
-        with patch.object(orchestrator, '_run_deterministic_checks', new_callable=AsyncMock) as mock_det_checks:
-            with patch.object(orchestrator, '_run_model_analysis', new_callable=AsyncMock) as mock_model:
-                with patch.object(orchestrator, '_run_validation', new_callable=AsyncMock) as mock_validate:
-                    with patch.object(orchestrator, '_persist_results', new_callable=AsyncMock) as mock_persist:
-                        
-                        mock_det_checks.return_value = DeterministicCheckResult(
-                            candidates=[
-                                DeterministicFindingCandidate(
-                                    ref_key="TERM-01",
-                                    quote="utilize",
-                                    start_offset=10,
-                                    end_offset=17,
-                                    explanation="Avoid using utilize",
-                                    suggestion="use",
-                                    rule_category="terminology",
-                                    severity="medium",
-                                ),
-                                DeterministicFindingCandidate(
-                                    ref_key="TERM-02",
-                                    quote="leverage",
-                                    start_offset=31,
-                                    end_offset=39,
-                                    explanation="Avoid using leverage",
-                                    suggestion="use",
-                                    rule_category="terminology",
-                                    severity="medium",
-                                ),
-                            ],
-                            skipped_checks=[],
-                        )
-                        mock_model.return_value = (
-                            model_candidates, model_skipped, model_name, prompt_version,
-                            input_tokens, output_tokens, model_warnings
-                        )
-                        mock_validate.return_value = validation_result
-                        
-                        # Run the complete pipeline
-                        output = await orchestrator.run_pipeline(review_id)
+        with patch('engine.app.pipeline.orchestrator.get_provider_with_fallback', return_value=mock_provider):
+            with patch.object(orchestrator, '_run_deterministic_checks', new_callable=AsyncMock, return_value=det_result) as mock_det_checks:
+                with patch.object(orchestrator, '_run_model_analysis', new_callable=AsyncMock, return_value=(
+                    model_candidates, model_skipped, model_name, prompt_version,
+                    input_tokens, output_tokens, model_warnings
+                )) as mock_model:
+                    with patch.object(orchestrator, '_run_validation', new_callable=AsyncMock, return_value=validation_result) as mock_validate:
+                        with patch.object(orchestrator, '_persist_results', new_callable=AsyncMock) as mock_persist:
+                            # Run the complete pipeline
+                            output = await orchestrator.run_pipeline(review_id)
 
         # --- Assertions ---
 
@@ -1703,7 +1677,7 @@ class TestFullPipelineOrchestration:
         assert output.llm_status == "ok"
 
         # 2. Both deterministic and model findings are validated and persisted
-        assert len(output.validated_findings) >= 4
+        assert len(output.validated_findings) == 4
         det_findings = [f for f in output.validated_findings if f.source == "deterministic"]
         model_findings = [f for f in output.validated_findings if f.source == "llm"]
 
@@ -1741,7 +1715,12 @@ class TestFullPipelineOrchestration:
         assert tone_finding.quote == "guaranteed"
         assert tone_finding.confidence == 0.85
 
-        # 5. Verify persistence was called with correct claim token
+        # 5. Verify internal methods were called in correct sequence
+        mock_det_checks.assert_called_once()
+        mock_model.assert_called_once()
+        mock_validate.assert_called_once()
+
+        # 6. Verify persistence was called with correct claim token
         mock_persist.assert_called_once()
         persist_args = mock_persist.call_args
         assert persist_args.kwargs['claim_token'] is not None
@@ -1749,14 +1728,10 @@ class TestFullPipelineOrchestration:
         assert persist_args.kwargs['llm_findings_raw'] == 2
         assert persist_args.kwargs['llm_findings_dropped'] == 0
 
-        # 6. Verify validator stats
+        # 7. Verify validator stats
         assert output.validator_stats['kept'] == 4
         assert output.validator_stats['raw'] == 4
         assert sum(output.validator_stats['dropped'].values()) == 0
-
-        # 7. Verify provider was called with correct request
-        # (Note: _run_model_analysis is mocked, so provider.generate_findings is not called directly.
-        # This test verifies orchestrator orchestration, not provider call details.)
 
 
 if __name__ == "__main__":
