@@ -333,9 +333,12 @@ export function ContentDetail() {
 
   // Action states
   const [submitting, setSubmitting] = useState(false);
-  const [creatingRevision, setCreatingRevision] = useState(false);
+  const [isCreatingRevision, setIsCreatingRevision] = useState(false);
   const [startingReview, setStartingReview] = useState(false);
   const [applyingDecisions, setApplyingDecisions] = useState(false);
+
+  // Editor visibility state (separate from mutation state)
+  const [isRevisionEditorOpen, setIsRevisionEditorOpen] = useState(false);
 
   // Single-submission guards
   const submittingRef = useRef(false);
@@ -355,6 +358,12 @@ export function ContentDetail() {
   // Polling for review status
   const pollTimerRef = useRef<number | null>(null);
   const revisionIdRef = useRef<string | null>(null);
+  const reviewRequestIdRef = useRef(0);
+  const pollGenerationRef = useRef(0);
+  const pollInFlightRef = useRef<number | null>(null);
+
+  // Textarea ref for reliable value reading
+  const revisionTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const loadContent = useCallback(async () => {
     if (!contentId || !session?.currentOrgId) return;
@@ -382,6 +391,21 @@ export function ContentDetail() {
 
       if (currentRequestId !== requestIdRef.current) return;
 
+      // Invalidate all outstanding review-data requests for the previous revision.
+      reviewRequestIdRef.current += 1;
+      revisionIdRef.current = rev?.id ?? null;
+
+      // Stop any polling associated with the previous revision.
+      if (pollTimerRef.current !== null) {
+        window.clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+
+
+      setLatestReview(null);
+      setFindings([]);
+      setPendingSignoffs(0);
+
       setLatestRevision(rev);
       setRevisions(revs);
     } catch (err) {
@@ -395,75 +419,164 @@ export function ContentDetail() {
   }, [contentId, session?.currentOrgId]);
 
   const loadReviewData = useCallback(async () => {
-    if (!latestRevision) return;
+    const revisionId = latestRevision?.id;
+
+    if (!revisionId || pollTimerRef.current !== null) return;
+
+
+    const requestId = ++reviewRequestIdRef.current;
 
     try {
-      const review = await getLatestReviewForRevision(latestRevision.id);
+      const review = await getLatestReviewForRevision(revisionId);
+
+      // Do not apply results if another request or revision superseded this one.
+      if (
+        requestId !== reviewRequestIdRef.current ||
+        revisionId !== revisionIdRef.current
+      ) {
+        return;
+      }
+
       setLatestReview(review);
 
-      if (review) {
-        const [findingsData, signoffs] = await Promise.all([
-          getFindingsWithDecisionsForReview(review.id),
-          getPendingSignoffs(contentId!),
-        ]);
-        setFindings(findingsData as FindingDisplay[]);
-        setPendingSignoffs(signoffs.length);
-      } else {
+      if (!review) {
         setFindings([]);
         setPendingSignoffs(0);
+        return;
       }
+
+      const [findingsData, signoffs] = await Promise.all([
+        getFindingsWithDecisionsForReview(review.id),
+        getPendingSignoffs(contentId!),
+      ]);
+
+      // Check again after the asynchronous data fetches.
+      if (
+        requestId !== reviewRequestIdRef.current ||
+        revisionId !== revisionIdRef.current
+      ) {
+        return;
+      }
+
+      setFindings(findingsData as FindingDisplay[]);
+      setPendingSignoffs(signoffs.length);
     } catch (err) {
+      if (
+        requestId !== reviewRequestIdRef.current ||
+        revisionId !== revisionIdRef.current
+      ) {
+        return;
+      }
+
       console.error('Failed to load review data:', err);
       setFindings([]);
       setPendingSignoffs(0);
+      setToastError(
+        err instanceof Error ? err.message : 'Failed to load review data'
+      );
     }
-  }, [latestRevision, contentId]);
+  }, [latestRevision?.id, contentId]);
+
 
   // Polling for review status when review is queued or running
-  const startPolling = useCallback(() => {
-    if (pollTimerRef.current) return;
 
-    const poll = async () => {
-      if (!latestRevision) {
+const stopPolling = useCallback(() => {
+  // Invalidate every poll belonging to the previous generation.
+  pollGenerationRef.current += 1;
+
+  if (pollTimerRef.current !== null) {
+    window.clearInterval(pollTimerRef.current);
+    pollTimerRef.current = null;
+  }
+}, []);
+
+const startPolling = useCallback(() => {
+  const revisionId = latestRevision?.id;
+
+  if (!revisionId || pollTimerRef.current !== null) return;
+
+  // Assign a unique generation to this polling session.
+  const generation = ++pollGenerationRef.current;
+
+  const poll = async () => {
+    // Ignore polls belonging to an outdated generation.
+    if (generation !== pollGenerationRef.current) return;
+
+    // Prevent overlapping requests within this generation.
+    if (pollInFlightRef.current === generation) return;
+
+    // Stop if the active revision has changed.
+    if (revisionIdRef.current !== revisionId) {
+      stopPolling();
+      return;
+    }
+
+    pollInFlightRef.current = generation;
+
+    try {
+      const review = await getLatestReviewForRevision(revisionId);
+
+      // Ignore stale responses.
+      if (
+        generation !== pollGenerationRef.current ||
+        revisionIdRef.current !== revisionId
+      ) {
+        return;
+      }
+
+      if (!review) {
         stopPolling();
         return;
       }
 
-      try {
-        const review = await getLatestReviewForRevision(latestRevision.id);
-        if (!review) {
-          stopPolling();
+      setLatestReview(review);
+
+      if (review.status === 'done' || review.status === 'failed') {
+        const [findingsData, signoffs] = await Promise.all([
+          getFindingsWithDecisionsForReview(review.id),
+          getPendingSignoffs(contentId!),
+        ]);
+
+        // Recheck after asynchronous requests finish.
+        if (
+          generation !== pollGenerationRef.current ||
+          revisionIdRef.current !== revisionId
+        ) {
           return;
         }
 
-        setLatestReview(review);
+        setFindings(findingsData as FindingDisplay[]);
+        setPendingSignoffs(signoffs.length);
 
-        if (review.status === 'done' || review.status === 'failed') {
-          const [findingsData, signoffs] = await Promise.all([
-            getFindingsWithDecisionsForReview(review.id),
-            getPendingSignoffs(contentId!),
-          ]);
-          setFindings(findingsData as FindingDisplay[]);
-          setPendingSignoffs(signoffs.length);
-          stopPolling();
-        }
-      } catch (err) {
-        console.error('Polling failed:', err);
         stopPolling();
       }
-    };
-
-    pollTimerRef.current = window.setInterval(poll, 3000);
-    // Initial poll
-    poll();
-  }, [latestRevision, contentId]);
-
-  const stopPolling = useCallback(() => {
-    if (pollTimerRef.current) {
-      window.clearInterval(pollTimerRef.current);
-      pollTimerRef.current = null;
+    } catch (err) {
+      if (
+        generation === pollGenerationRef.current &&
+        revisionIdRef.current === revisionId
+      ) {
+        console.error('Polling failed:', err);
+        setToastError(
+          err instanceof Error ? err.message : 'Review status polling failed'
+        );
+        stopPolling();
+      }
+    } finally {
+      // An old poll must never clear a newer generation's lock.
+      if (pollInFlightRef.current === generation) {
+        pollInFlightRef.current = null;
+      }
     }
-  }, []);
+  };
+
+  // Poll immediately, then every three seconds.
+  void poll();
+
+  pollTimerRef.current = window.setInterval(() => {
+    void poll();
+  }, 3000);
+}, [latestRevision?.id, contentId, stopPolling]);
+
 
   // Start/stop polling when review status changes
   useEffect(() => {
@@ -476,14 +589,13 @@ export function ContentDetail() {
     return () => stopPolling();
   }, [latestReview, startPolling, stopPolling]);
 
-  // Cleanup polling on unmount and when revision changes
+  // Cleanup on unmount: invalidate pending review requests and stop polling
   useEffect(() => {
-    revisionIdRef.current = latestRevision?.id || null;
-
     return () => {
+      reviewRequestIdRef.current += 1;
       stopPolling();
     };
-  }, [latestRevision?.id, stopPolling]);
+  }, [stopPolling]);
 
   useEffect(() => {
     if (!authLoading && session && contentId) {
@@ -522,24 +634,36 @@ export function ContentDetail() {
     }
   };
 
-  const handleCreateRevision = async (body: string) => {
+  // Shared handler for Create Revision (button and Ctrl+Enter)
+  const handleCreateRevisionSubmit = useCallback(async () => {
     if (!content) return;
     if (creatingRevisionRef.current) return;
 
+    const body = revisionTextareaRef.current?.value ?? '';
+    // Validate: not empty or whitespace-only
+    if (!body.trim()) {
+      setToastError('Revision content cannot be empty');
+      return;
+    }
+
     creatingRevisionRef.current = true;
-    setCreatingRevision(true);
+    setIsCreatingRevision(true);
     setToastError(null);
 
     try {
       await createRevision(content.id, body);
+      // On success: close editor, clear ref, reload content/revisions
+      setIsRevisionEditorOpen(false);
+      revisionTextareaRef.current = null; // Clear ref after success
       await loadContent();
     } catch (err) {
+      // On failure: preserve editor and entered text, show error
       setToastError(err instanceof Error ? err.message : 'Failed to create revision');
     } finally {
-      setCreatingRevision(false);
+      setIsCreatingRevision(false);
       creatingRevisionRef.current = false;
     }
-  };
+  }, [content, loadContent]);
 
   const handleStartReview = async () => {
     if (!latestRevision) return;
@@ -620,6 +744,21 @@ export function ContentDetail() {
     }
   };
 
+  // Open editor handler
+  const handleOpenRevisionEditor = () => {
+    setIsRevisionEditorOpen(true);
+    // Focus textarea after render
+    setTimeout(() => {
+      revisionTextareaRef.current?.focus();
+    }, 0);
+  };
+
+  // Close editor handler (cancel)
+  const handleCloseRevisionEditor = () => {
+    setIsRevisionEditorOpen(false);
+    revisionTextareaRef.current = null;
+  };
+
   if (authLoading || !session) {
     return <LoadingScreen message="Loading authentication..." />;
   }
@@ -671,11 +810,11 @@ export function ContentDetail() {
         <div className="flex items-center gap-3">
           {isContentEditable && (
             <button
-              onClick={() => setCreatingRevision(true)}
-              disabled={creatingRevision}
+              onClick={handleOpenRevisionEditor}
+              disabled={isCreatingRevision}
               className="px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary-dark disabled:opacity-50"
             >
-              {creatingRevision ? 'Creating...' : 'New Revision'}
+              {isCreatingRevision ? 'Creating...' : 'New Revision'}
             </button>
           )}
           {canSubmit && (
@@ -831,22 +970,25 @@ export function ContentDetail() {
           )}
 
           {/* New Revision Form */}
-          {creatingRevision && (
+          {isRevisionEditorOpen && (
             <div className="bg-white border border-gray-200 rounded-lg p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="font-semibold text-gray-900">Create New Revision</h3>
                 <button
-                  onClick={() => setCreatingRevision(false)}
-                  className="text-gray-400 hover:text-gray-600 text-xl leading-none p-1"
+                  onClick={handleCloseRevisionEditor}
+                  disabled={isCreatingRevision}
+                  className="text-gray-400 hover:text-gray-600 text-xl leading-none p-1 disabled:opacity-50"
                 >
                   ×
                 </button>
               </div>
               <textarea
+                ref={revisionTextareaRef}
                 defaultValue={latestRevision?.body || ''}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && e.ctrlKey) {
-                    handleCreateRevision((e.target as HTMLTextAreaElement).value);
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    handleCreateRevisionSubmit();
                   }
                 }}
                 rows={15}
@@ -855,17 +997,18 @@ export function ContentDetail() {
               />
               <div className="flex justify-end gap-3">
                 <button
-                  onClick={() => setCreatingRevision(false)}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  onClick={handleCloseRevisionEditor}
+                  disabled={isCreatingRevision}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={() => handleCreateRevision((document.activeElement as HTMLTextAreaElement).value)}
-                  disabled={creatingRevision}
+                  onClick={handleCreateRevisionSubmit}
+                  disabled={isCreatingRevision}
                   className="px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary-dark disabled:opacity-50"
                 >
-                  {creatingRevision ? 'Creating...' : 'Create Revision'}
+                  {isCreatingRevision ? 'Creating...' : 'Create Revision'}
                 </button>
               </div>
             </div>
