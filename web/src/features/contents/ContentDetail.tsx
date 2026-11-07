@@ -238,10 +238,10 @@ function ReviewStatusSection({
         {isContentEditable && (
           <button
             onClick={handleStartReview}
-            disabled={!latestReview}
-            className="mt-4 px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary-dark"
+            disabled={startingReview}
+            className="mt-4 px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary-dark disabled:opacity-50"
           >
-            Start Review
+            {startingReview ? 'Starting...' : 'Start Review'}
           </button>
         )}
       </div>
@@ -337,6 +337,12 @@ export function ContentDetail() {
   const [startingReview, setStartingReview] = useState(false);
   const [applyingDecisions, setApplyingDecisions] = useState(false);
 
+  // Single-submission guards
+  const submittingRef = useRef(false);
+  const creatingRevisionRef = useRef(false);
+  const startingReviewRef = useRef(false);
+  const applyingDecisionsRef = useRef(false);
+
   // Error states
   const [toastError, setToastError] = useState<string | null>(null);
 
@@ -345,6 +351,10 @@ export function ContentDetail() {
 
   // Stale request protection
   const requestIdRef = useRef(0);
+
+  // Polling for review status
+  const pollTimerRef = useRef<number | null>(null);
+  const revisionIdRef = useRef<string | null>(null);
 
   const loadContent = useCallback(async () => {
     if (!contentId || !session?.currentOrgId) return;
@@ -409,6 +419,72 @@ export function ContentDetail() {
     }
   }, [latestRevision, contentId]);
 
+  // Polling for review status when review is queued or running
+  const startPolling = useCallback(() => {
+    if (pollTimerRef.current) return;
+
+    const poll = async () => {
+      if (!latestRevision) {
+        stopPolling();
+        return;
+      }
+
+      try {
+        const review = await getLatestReviewForRevision(latestRevision.id);
+        if (!review) {
+          stopPolling();
+          return;
+        }
+
+        setLatestReview(review);
+
+        if (review.status === 'done' || review.status === 'failed') {
+          const [findingsData, signoffs] = await Promise.all([
+            getFindingsWithDecisionsForReview(review.id),
+            getPendingSignoffs(contentId!),
+          ]);
+          setFindings(findingsData as FindingDisplay[]);
+          setPendingSignoffs(signoffs.length);
+          stopPolling();
+        }
+      } catch (err) {
+        console.error('Polling failed:', err);
+        stopPolling();
+      }
+    };
+
+    pollTimerRef.current = window.setInterval(poll, 3000);
+    // Initial poll
+    poll();
+  }, [latestRevision, contentId]);
+
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current) {
+      window.clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, []);
+
+  // Start/stop polling when review status changes
+  useEffect(() => {
+    if (latestReview && (latestReview.status === 'queued' || latestReview.status === 'running')) {
+      startPolling();
+    } else {
+      stopPolling();
+    }
+
+    return () => stopPolling();
+  }, [latestReview, startPolling, stopPolling]);
+
+  // Cleanup polling on unmount and when revision changes
+  useEffect(() => {
+    revisionIdRef.current = latestRevision?.id || null;
+
+    return () => {
+      stopPolling();
+    };
+  }, [latestRevision?.id, stopPolling]);
+
   useEffect(() => {
     if (!authLoading && session && contentId) {
       loadContent();
@@ -428,7 +504,9 @@ export function ContentDetail() {
 
   const handleSubmit = async () => {
     if (!content || !latestRevision) return;
+    if (submittingRef.current) return;
 
+    submittingRef.current = true;
     setSubmitting(true);
     setToastError(null);
 
@@ -440,12 +518,15 @@ export function ContentDetail() {
       setToastError(err instanceof Error ? err.message : 'Failed to submit content');
     } finally {
       setSubmitting(false);
+      submittingRef.current = false;
     }
   };
 
   const handleCreateRevision = async (body: string) => {
     if (!content) return;
+    if (creatingRevisionRef.current) return;
 
+    creatingRevisionRef.current = true;
     setCreatingRevision(true);
     setToastError(null);
 
@@ -456,12 +537,15 @@ export function ContentDetail() {
       setToastError(err instanceof Error ? err.message : 'Failed to create revision');
     } finally {
       setCreatingRevision(false);
+      creatingRevisionRef.current = false;
     }
   };
 
   const handleStartReview = async () => {
     if (!latestRevision) return;
+    if (startingReviewRef.current) return;
 
+    startingReviewRef.current = true;
     setStartingReview(true);
     setToastError(null);
 
@@ -478,6 +562,7 @@ export function ContentDetail() {
       }
     } finally {
       setStartingReview(false);
+      startingReviewRef.current = false;
     }
   };
 
@@ -501,7 +586,9 @@ export function ContentDetail() {
 
   const handleApplyDecisions = async () => {
     if (!content) return;
+    if (applyingDecisionsRef.current) return;
 
+    applyingDecisionsRef.current = true;
     setApplyingDecisions(true);
     setToastError(null);
 
@@ -518,6 +605,7 @@ export function ContentDetail() {
       setToastError(err instanceof Error ? err.message : 'Failed to apply decisions');
     } finally {
       setApplyingDecisions(false);
+      applyingDecisionsRef.current = false;
     }
   };
 
@@ -555,7 +643,8 @@ export function ContentDetail() {
   const hasLatestReview = !!latestReview;
   const hasPendingDecisions = findings.some(f => (f.last_action === 'accept' || f.last_action === 'edit') && !f.resulting_revision_id);
   const hasDecisions = findings.some(f => f.last_action);
-  const allFindingsDecided = findings.length > 0 && findings.every(f => f.last_action);
+  // Zero findings is valid - all findings (zero) are decided vacuously
+  const allFindingsDecided = findings.every(f => f.last_action);
   const canSubmit = isContentEditable && hasLatestReview && latestReview?.status === 'done' &&
     (latestReview.llm_status === 'ok' || latestReview.llm_status === 'skipped') &&
     allFindingsDecided && !hasPendingDecisions;
@@ -712,11 +801,13 @@ export function ContentDetail() {
                 </div>
               )}
 
-              {!hasPendingDecisions && hasDecisions && allFindingsDecided && !findings.some(f => f.last_action) && canSubmit && (
+              {!hasPendingDecisions && allFindingsDecided && canSubmit && (
                 <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                   <p className="font-medium text-green-800 mb-2">Ready to Submit</p>
                   <p className="text-sm text-green-700 mb-3">
-                    All findings have been decided. You can submit this content for approval.
+                    {findings.length === 0
+                      ? 'No findings were generated. You can submit this content for approval.'
+                      : 'All findings have been decided. You can submit this content for approval.'}
                   </p>
                   <button
                     onClick={handleSubmit}
@@ -728,7 +819,7 @@ export function ContentDetail() {
                 </div>
               )}
 
-              {!hasDecisions && canSubmit && (
+              {!hasDecisions && allFindingsDecided && findings.length > 0 && canSubmit && (
                 <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                   <p className="font-medium text-gray-800 mb-2">No Findings Decided</p>
                   <p className="text-sm text-gray-600 mb-3">
@@ -753,7 +844,6 @@ export function ContentDetail() {
               </div>
               <textarea
                 defaultValue={latestRevision?.body || ''}
-                onBlur={(e) => handleCreateRevision(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && e.ctrlKey) {
                     handleCreateRevision((e.target as HTMLTextAreaElement).value);

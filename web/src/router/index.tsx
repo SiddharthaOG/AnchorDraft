@@ -248,16 +248,14 @@ export const router = createBrowserRouter([
             <KitList />
           </RoleRoute>
         ),
-        children: [
-          {
-            path: ':kitId',
-            element: (
-              <RoleRoute allowedRoles={['owner']}>
-                <KitDetail />
-              </RoleRoute>
-            ),
-          },
-        ],
+      },
+      {
+        path: 'kits/:kitId',
+        element: (
+          <RoleRoute allowedRoles={['owner']}>
+            <KitDetail />
+          </RoleRoute>
+        ),
       },
       // Manager routes
       {
