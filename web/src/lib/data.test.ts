@@ -1418,3 +1418,21 @@ describe('Insights queries', () => {
     });
   });
 });
+
+describe('getEngineUrl', () => {
+  const originalEnv = import.meta.env;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns development fallback when VITE_ENGINE_URL not set in development', async () => {
+    vi.stubGlobal('import.meta', { ...originalEnv, env: { ...originalEnv, VITE_ENGINE_URL: undefined, PROD: false } });
+    const { getEngineUrl } = await import('../lib/data');
+    expect(getEngineUrl()).toBe('http://localhost:8000');
+  });
+});

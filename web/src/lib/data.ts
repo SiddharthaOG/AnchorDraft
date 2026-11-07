@@ -919,8 +919,11 @@ function getEngineUrl(): string {
     }
     return 'http://localhost:8000';
   }
-  return url;
+  // Remove all trailing slashes to prevent double-slash in API paths
+  return url.replace(/\/+$/, '');
 }
+
+export { getEngineUrl };
 
 export async function lintKit(kitId: string): Promise<KitLintResponse> {
   const token = await getAuthToken();
