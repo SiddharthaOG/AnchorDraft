@@ -38,6 +38,18 @@ function StatCard({ label, value, icon, href }: StatCardProps) {
   return href ? <Link to={href}>{content}</Link> : content;
 }
 
+function DisabledAction({ children, label }: { children: React.ReactNode; label: string }) {
+  return (
+    <div className="p-4 border border-gray-200 rounded-lg bg-gray-50 text-center opacity-60">
+      <div className="w-10 h-10 mx-auto text-gray-300 mb-2" aria-hidden="true">
+        {children}
+      </div>
+      <p className="font-medium text-gray-500">{label}</p>
+      <p className="text-xs text-gray-400 mt-1">Coming soon</p>
+    </div>
+  );
+}
+
 /** Owner dashboard landing page. */
 export function OwnerLanding() {
   const { session, isLoading } = useAuth();
@@ -106,16 +118,13 @@ export function OwnerLanding() {
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Link
-            to="/kits/new"
-            className="p-4 border border-gray-200 rounded-lg hover:border-primary hover:bg-gray-50 transition-colors text-center"
+          <DisabledAction
+            label="Create Brand Kit"
           >
             <svg className="w-10 h-10 mx-auto text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
-            <p className="font-medium text-gray-900">Create Brand Kit</p>
-            <p className="text-sm text-gray-500 mt-1">Start a new kit version</p>
-          </Link>
+          </DisabledAction>
 
           <Link
             to="/kits"
@@ -128,16 +137,13 @@ export function OwnerLanding() {
             <p className="text-sm text-gray-500 mt-1">View and edit kits</p>
           </Link>
 
-          <Link
-            to="/kits/lint"
-            className="p-4 border border-gray-200 rounded-lg hover:border-primary hover:bg-gray-50 transition-colors text-center"
+          <DisabledAction
+            label="Lint Kit"
           >
             <svg className="w-10 h-10 mx-auto text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <p className="font-medium text-gray-900">Lint Kit</p>
-            <p className="text-sm text-gray-500 mt-1">Check for issues before activation</p>
-          </Link>
+          </DisabledAction>
         </div>
       </div>
 
@@ -154,9 +160,13 @@ export function OwnerLanding() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2h12z" />
           </svg>
           <p className="text-gray-500 mb-4">No brand kits yet</p>
-          <Link to="/kits/new" className="inline-flex items-center px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark">
-            Create your first brand kit
-          </Link>
+          <DisabledAction
+            label="Create your first brand kit"
+          >
+            <svg className="w-6 h-6 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+          </DisabledAction>
         </div>
       </div>
 

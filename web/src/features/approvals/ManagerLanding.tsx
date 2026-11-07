@@ -38,6 +38,18 @@ function StatCard({ label, value, icon, href }: StatCardProps) {
   return href ? <Link to={href}>{content}</Link> : content;
 }
 
+function DisabledAction({ children, label }: { children: React.ReactNode; label: string }) {
+  return (
+    <div className="p-4 border border-gray-200 rounded-lg bg-gray-50 text-center opacity-60">
+      <div className="w-10 h-10 mx-auto text-gray-300 mb-2" aria-hidden="true">
+        {children}
+      </div>
+      <p className="font-medium text-gray-500">{label}</p>
+      <p className="text-xs text-gray-400 mt-1">Coming soon</p>
+    </div>
+  );
+}
+
 /** Manager dashboard landing page. */
 export function ManagerLanding() {
   const { session, isLoading } = useAuth();
@@ -117,27 +129,21 @@ export function ManagerLanding() {
             <p className="text-sm text-gray-500 mt-1">Content awaiting decision</p>
           </Link>
 
-          <Link
-            to="/approvals/pending-signoffs"
-            className="p-4 border border-gray-200 rounded-lg hover:border-primary hover:bg-gray-50 transition-colors text-center"
+          <DisabledAction
+            label="Pending Sign-offs"
           >
             <svg className="w-10 h-10 mx-auto text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <p className="font-medium text-gray-900">Pending Sign-offs</p>
-            <p className="text-sm text-gray-500 mt-1">Findings needing reviewer sign-off</p>
-          </Link>
+          </DisabledAction>
 
-          <Link
-            to="/approvals/history"
-            className="p-4 border border-gray-200 rounded-lg hover:border-primary hover:bg-gray-50 transition-colors text-center"
+          <DisabledAction
+            label="Approval History"
           >
             <svg className="w-10 h-10 mx-auto text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <p className="font-medium text-gray-900">Approval History</p>
-            <p className="text-sm text-gray-500 mt-1">Past decisions and approvals</p>
-          </Link>
+          </DisabledAction>
         </div>
       </div>
 

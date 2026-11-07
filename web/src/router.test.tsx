@@ -88,6 +88,7 @@ vi.mock('./features/auth/userRole', () => ({
 }))
 
 // Recreate the router structure using MemoryRouter-compatible components
+// NEW STRUCTURE: ProtectedRoute wraps Layout (authentication checked before Layout renders)
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { session, isLoading } = useAuth()
 
@@ -258,15 +259,15 @@ function TestRoutes() {
           </PublicRoute>
         }
       />
-      {/* Protected routes (Layout wrapper applied once) */}
+      {/* Protected routes: ProtectedRoute wraps Layout (new structure) */}
       <Route
         path="/"
         element={
-          <Layout>
-            <ProtectedRoute>
+          <ProtectedRoute>
+            <Layout>
               <Outlet />
-            </ProtectedRoute>
-          </Layout>
+            </Layout>
+          </ProtectedRoute>
         }
       >
         {/* Creator routes */}
@@ -373,12 +374,14 @@ describe('Router', () => {
     unmount()
   })
 
-  it('redirects unauthenticated users to login for protected routes', async () => {
+  it('redirects unauthenticated users to login for root route /', async () => {
     mockInitializeSession.mockResolvedValue(null)
     const { unmount } = await renderRouter('/')
 
+    // With new structure: ProtectedRoute wraps Layout, so unauthenticated users
+    // are redirected to /login before Layout renders
     await waitFor(() => {
-      expect(screen.getByText('Access Denied')).toBeInTheDocument()
+      expect(screen.getByText('Sign in to AnchorDraft')).toBeInTheDocument()
     })
 
     unmount()
@@ -410,34 +413,147 @@ describe('Router', () => {
     unmount()
   })
 
-  it('protected routes require authentication for /kits', async () => {
+  it('redirects unauthenticated users to login for /kits', async () => {
     mockInitializeSession.mockResolvedValue(null)
+    const { unmount } = await renderRouter('/kits')
+
+    await waitFor(() => {
+      expect(screen.getByText('Sign in to AnchorDraft')).toBeInTheDocument()
+    })
+
+    unmount()
+  })
+
+  it('redirects unauthenticated users to login for /approvals', async () => {
+    mockInitializeSession.mockResolvedValue(null)
+    const { unmount } = await renderRouter('/approvals')
+
+    await waitFor(() => {
+      expect(screen.getByText('Sign in to AnchorDraft')).toBeInTheDocument()
+    })
+
+    unmount()
+  })
+
+  it('redirects unauthenticated users to login for /review', async () => {
+    mockInitializeSession.mockResolvedValue(null)
+    const { unmount } = await renderRouter('/review')
+
+    await waitFor(() => {
+      expect(screen.getByText('Sign in to AnchorDraft')).toBeInTheDocument()
+    })
+
+    unmount()
+  })
+
+  it('shows Access Denied for authenticated user without owner role accessing /kits', async () => {
+    // Mock authenticated session with creator role (not owner)
+    mockInitializeSession.mockResolvedValue({
+      user: { id: 'user-1', email: 'creator@example.com' },
+      profile: { display_name: 'Test Creator' },
+      currentRoles: ['creator'],
+      organizations: [{ id: 'org-1', name: 'Test Org' }],
+      currentOrgId: 'org-1',
+      isLoading: false,
+      error: null,
+    } as any)
+
     const { unmount } = await renderRouter('/kits')
 
     await waitFor(() => {
       expect(screen.getByText('Access Denied')).toBeInTheDocument()
     })
 
+    // Verify the required roles are shown
+    expect(screen.getByText('Owner')).toBeInTheDocument()
+
     unmount()
   })
 
-  it('protected routes require authentication for /approvals', async () => {
-    mockInitializeSession.mockResolvedValue(null)
+  it('shows Access Denied for authenticated user without manager role accessing /approvals', async () => {
+    mockInitializeSession.mockResolvedValue({
+      user: { id: 'user-1', email: 'creator@example.com' },
+      profile: { display_name: 'Test Creator' },
+      currentRoles: ['creator'],
+      organizations: [{ id: 'org-1', name: 'Test Org' }],
+      currentOrgId: 'org-1',
+      isLoading: false,
+      error: null,
+    } as any)
+
     const { unmount } = await renderRouter('/approvals')
 
     await waitFor(() => {
       expect(screen.getByText('Access Denied')).toBeInTheDocument()
     })
 
+    expect(screen.getByText('Manager')).toBeInTheDocument()
+    expect(screen.getByText('Owner')).toBeInTheDocument()
+
     unmount()
   })
 
-  it('protected routes require authentication for /review', async () => {
-    mockInitializeSession.mockResolvedValue(null)
+  it('shows Access Denied for authenticated user without reviewer role accessing /review', async () => {
+    mockInitializeSession.mockResolvedValue({
+      user: { id: 'user-1', email: 'creator@example.com' },
+      profile: { display_name: 'Test Creator' },
+      currentRoles: ['creator'],
+      organizations: [{ id: 'org-1', name: 'Test Org' }],
+      currentOrgId: 'org-1',
+      isLoading: false,
+      error: null,
+    } as any)
+
     const { unmount } = await renderRouter('/review')
 
     await waitFor(() => {
       expect(screen.getByText('Access Denied')).toBeInTheDocument()
+    })
+
+    expect(screen.getByText('Reviewer')).toBeInTheDocument()
+    expect(screen.getByText('Owner')).toBeInTheDocument()
+
+    unmount()
+  })
+
+  it('renders CreatorLanding for authenticated creator at root /', async () => {
+    mockInitializeSession.mockResolvedValue({
+      user: { id: 'user-1', email: 'creator@example.com' },
+      profile: { display_name: 'Test Creator' },
+      currentRoles: ['creator'],
+      organizations: [{ id: 'org-1', name: 'Test Org' }],
+      currentOrgId: 'org-1',
+      isLoading: false,
+      error: null,
+    } as any)
+
+    const { unmount } = await renderRouter('/')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('creator-landing')).toBeInTheDocument()
+    })
+
+    // Layout should be rendered (AnchorDraft title visible)
+    expect(screen.getByText('AnchorDraft')).toBeInTheDocument()
+
+    unmount()
+  })
+
+  it('renders OwnerLanding for authenticated owner at /kits', async () => {
+    mockInitializeSession.mockResolvedValue({
+      user: { id: 'user-1', email: 'owner@example.com' },
+      profile: { display_name: 'Test Owner' },
+      currentRoles: ['owner'],
+      organizations: [{ id: 'org-1', name: 'Test Org' }],
+      currentOrgId: 'org-1',
+      isLoading: false,
+      error: null,
+    } as any)
+
+    const { unmount } = await renderRouter('/kits')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('owner-landing')).toBeInTheDocument()
     })
 
     unmount()
