@@ -1,13 +1,7 @@
-import { HealthCheck } from './features/health/HealthCheck'
+/** App component - kept for compatibility, now just renders the router. */
 
-function App() {
-  return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        <HealthCheck />
-      </div>
-    </div>
-  )
+import { AppRouter } from './router';
+
+export default function App() {
+  return <AppRouter />;
 }
-
-export default App
