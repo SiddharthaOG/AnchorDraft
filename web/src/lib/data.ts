@@ -582,3 +582,233 @@ export async function activateKit(kitId: string): Promise<void> {
     throw new Error(`Failed to activate kit: ${error.message}`);
   }
 }
+
+// ============================================================
+// Kit lint API client
+// ============================================================
+
+export interface KitLintIssue {
+  severity: 'error' | 'warning';
+  code: string;
+  ref_key: string | null;
+  message: string;
+}
+
+export interface KitLintStats {
+  rules: number;
+  facts: number;
+  llm_rules: number;
+  deterministic_rules: number;
+  prompt_chars_estimate: number;
+  prompt_chars_cap: number;
+}
+
+export interface KitLintResponse {
+  ok: boolean;
+  issues: KitLintIssue[];
+  stats: KitLintStats;
+}
+
+export class KitLintError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly originalError?: Error,
+  ) {
+    super(message);
+    this.name = 'KitLintError';
+  }
+}
+
+function getEngineUrl(): string {
+  const url = import.meta.env.VITE_ENGINE_URL;
+  if (!url) {
+    const isProduction = import.meta.env.PROD || window.location.hostname !== 'localhost';
+    if (isProduction) {
+      throw new Error(
+        'VITE_ENGINE_URL is not configured. Set VITE_ENGINE_URL environment variable to the engine base URL (e.g., https://anchordraft.onrender.com).'
+      );
+    }
+    return 'http://localhost:8000';
+  }
+  return url;
+}
+
+async function getAuthToken(): Promise<string> {
+  const { data, error } = await supabase.auth.getSession();
+  if (error || !data?.session?.access_token) {
+    throw new KitLintError('No valid session', 401);
+  }
+  return data.session.access_token;
+}
+
+export async function lintKit(kitId: string): Promise<KitLintResponse> {
+  const token = await getAuthToken();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+  try {
+    const response = await fetch(`${getEngineUrl()}/v1/kits/${kitId}/lint`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-Request-Id': crypto.randomUUID(),
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const message = errorData.error?.message || `Lint failed: ${response.status} ${response.statusText}`;
+      throw new KitLintError(message, response.status);
+    }
+
+    const data = (await response.json()) as KitLintResponse;
+
+    // Validate response shape
+    if (typeof data.ok !== 'boolean' || !Array.isArray(data.issues) || !data.stats) {
+      throw new KitLintError('Invalid lint response shape', 500);
+    }
+
+    return data;
+  } catch (err) {
+    if (err instanceof KitLintError) throw err;
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new KitLintError('Lint request timeout after 60s', 504, err);
+    }
+    throw new KitLintError(
+      err instanceof Error ? err.message : 'Network error',
+      0,
+      err instanceof Error ? err : undefined,
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// ============================================================
+// Rule mutations (draft kits only, via RLS)
+// ============================================================
+
+export interface CreateRuleInput {
+  kit_id: string;
+  rule_key: string;
+  category: Rule['category'];
+  title: string;
+  guideline_text: string;
+  severity: Rule['severity'];
+  check_kind: Rule['check_kind'];
+  config: Record<string, unknown> | null;
+  needs_reviewer: boolean;
+  example_bad: string | null;
+  example_good: string | null;
+}
+
+export async function createRule(input: CreateRuleInput): Promise<Rule> {
+  const { data, error } = await supabase
+    .from('rules')
+    .insert(input)
+    .select()
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to create rule: ${error.message}`);
+  }
+  return data;
+}
+
+export interface UpdateRuleInput {
+  rule_key?: string;
+  category?: Rule['category'];
+  title?: string;
+  guideline_text?: string;
+  severity?: Rule['severity'];
+  check_kind?: Rule['check_kind'];
+  config?: Record<string, unknown> | null;
+  needs_reviewer?: boolean;
+  example_bad?: string | null;
+  example_good?: string | null;
+}
+
+export async function updateRule(ruleId: string, input: UpdateRuleInput): Promise<Rule> {
+  const { data, error } = await supabase
+    .from('rules')
+    .update(input)
+    .eq('id', ruleId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to update rule: ${error.message}`);
+  }
+  return data;
+}
+
+export async function deleteRule(ruleId: string): Promise<void> {
+  const { error } = await supabase
+    .from('rules')
+    .delete()
+    .eq('id', ruleId);
+
+  if (error) {
+    throw new Error(`Failed to delete rule: ${error.message}`);
+  }
+}
+
+// ============================================================
+// Approved fact mutations (draft kits only, via RLS)
+// ============================================================
+
+export interface CreateFactInput {
+  kit_id: string;
+  fact_key: string;
+  statement: string;
+  source_note: string;
+  valid_until: string | null;
+}
+
+export async function createFact(input: CreateFactInput): Promise<ApprovedFact> {
+  const { data, error } = await supabase
+    .from('approved_facts')
+    .insert(input)
+    .select()
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to create approved fact: ${error.message}`);
+  }
+  return data;
+}
+
+export interface UpdateFactInput {
+  fact_key?: string;
+  statement?: string;
+  source_note?: string;
+  valid_until?: string | null;
+}
+
+export async function updateFact(factId: string, input: UpdateFactInput): Promise<ApprovedFact> {
+  const { data, error } = await supabase
+    .from('approved_facts')
+    .update(input)
+    .eq('id', factId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to update approved fact: ${error.message}`);
+  }
+  return data;
+}
+
+export async function deleteFact(factId: string): Promise<void> {
+  const { error } = await supabase
+    .from('approved_facts')
+    .delete()
+    .eq('id', factId);
+
+  if (error) {
+    throw new Error(`Failed to delete approved fact: ${error.message}`);
+  }
+}

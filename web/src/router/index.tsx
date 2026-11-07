@@ -8,6 +8,8 @@ import { CreatorLanding } from '../features/contents/CreatorLanding';
 import { ManagerLanding } from '../features/approvals/ManagerLanding';
 import { ReviewerLanding } from '../features/findings/ReviewerLanding';
 import { OwnerLanding } from '../features/kits/OwnerLanding';
+import { KitList } from '../features/kits/KitList';
+import { KitDetail } from '../features/kits/KitDetail';
 import { NoAccess } from '../components/NoAccess';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { AuthCallback } from '../features/auth/AuthCallback';
@@ -208,14 +210,33 @@ export const router = createBrowserRouter([
           </RoleRoute>
         ),
       },
-      // Owner (Guideline Owner) routes
+      // Owner dashboard
       {
-        path: 'kits',
+        path: 'owner',
         element: (
           <RoleRoute allowedRoles={['owner']}>
             <OwnerLanding />
           </RoleRoute>
         ),
+      },
+      // Brand Kits management
+      {
+        path: 'kits',
+        element: (
+          <RoleRoute allowedRoles={['owner']}>
+            <KitList />
+          </RoleRoute>
+        ),
+        children: [
+          {
+            path: ':kitId',
+            element: (
+              <RoleRoute allowedRoles={['owner']}>
+                <KitDetail />
+              </RoleRoute>
+            ),
+          },
+        ],
       },
       // Manager routes
       {
