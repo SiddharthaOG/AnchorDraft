@@ -12,6 +12,7 @@ from engine.app.validator.validator import (
     FactRecord,
     normalize_text,
     find_quote_occurrences,
+    AggregateValidationResult,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "FactRecord",
     "normalize_text",
     "find_quote_occurrences",
+    "AggregateValidationResult",
 ]

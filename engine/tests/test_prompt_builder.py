@@ -135,7 +135,8 @@ class TestFilterValidFacts:
 
     def test_non_expired_facts_included(self):
         """Test that non-expired facts are included."""
-        future_date = date.today() + timedelta(days=30)
+        # Use a fixed future date that's clearly in the future
+        future_date = date(2099, 12, 31)
         facts = [
             make_fact(fact_key="FACT-01", valid_until=future_date),
             make_fact(fact_key="FACT-02", valid_until=None),  # No expiration
@@ -145,7 +146,7 @@ class TestFilterValidFacts:
 
     def test_expired_facts_excluded(self):
         """Test that expired facts are excluded."""
-        past_date = date.today() - timedelta(days=1)
+        past_date = date(2020, 1, 1)  # Fixed past date
         facts = [
             make_fact(fact_key="FACT-01", valid_until=past_date),
             make_fact(fact_key="FACT-02", valid_until=None),
@@ -313,7 +314,7 @@ class TestExtractOfferedReferences:
             ],
             facts=[
                 make_fact(fact_key="FACT-01"),
-                make_fact(fact_key="FACT-02", valid_until=date.today() - timedelta(days=1)),  # Expired
+                make_fact(fact_key="FACT-02", valid_until=date(2020, 1, 1)),  # Expired
             ],
         )
         rule_keys, fact_keys = extract_offered_references(input_data)
@@ -340,7 +341,7 @@ class TestExtractOfferedReferences:
 
     def test_excludes_expired_facts(self):
         """Test that expired facts are excluded from model-offered keys."""
-        past_date = date.today() - timedelta(days=1)
+        past_date = date(2020, 1, 1)  # Fixed past date
         input_data = PromptInput(
             draft_text="Draft",
             purpose="Test",
@@ -488,7 +489,7 @@ class TestBuildProviderRequest:
 
     def test_expired_facts_excluded(self):
         """Test that expired facts are not included in prompt."""
-        past_date = date.today() - timedelta(days=1)
+        past_date = date(2020, 1, 1)  # Fixed past date
         input_data = PromptInput(
             draft_text="Draft",
             purpose="Test",
@@ -496,7 +497,7 @@ class TestBuildProviderRequest:
             rules=[make_rule()],
             facts=[
                 make_fact(fact_key="FACT-01"),
-                make_fact(fact_key="FACT-02", valid_until=date.today() - timedelta(days=1)),
+                make_fact(fact_key="FACT-02", valid_until=date(2020, 1, 1)),
             ],
         )
         request = build_provider_request(input_data)
@@ -953,7 +954,7 @@ class TestInputSizeLimits:
 
     def test_expired_facts_not_counted_in_kit(self):
         """Test that expired facts are not counted toward kit limit."""
-        past_date = date.today() - timedelta(days=1)
+        past_date = date(2020, 1, 1)  # Fixed past date
         input_data = PromptInput(
             draft_text="Test draft",
             purpose="Test",
@@ -961,7 +962,7 @@ class TestInputSizeLimits:
             rules=[make_rule()],
             facts=[
                 make_fact(fact_key="FACT-01", statement="x" * 10000),
-                make_fact(fact_key="FACT-02", statement="y" * 10000, valid_until=date.today() - timedelta(days=1)),
+                make_fact(fact_key="FACT-02", statement="y" * 10000, valid_until=date(2020, 1, 1)),
             ],
         )
         # Only non-expired fact should count
