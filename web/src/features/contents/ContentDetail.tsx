@@ -365,6 +365,28 @@ export function ContentDetail() {
   // Textarea ref for reliable value reading
   const revisionTextareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Selected revision for viewing history
+  const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(null);
+  const [selectedRevision, setSelectedRevision] = useState<Revision | null>(null);
+
+  // Select a revision for viewing
+  const handleSelectRevision = useCallback((revision: Revision) => {
+    if (selectedRevisionId === revision.id) {
+      // Deselect if clicking the same revision, fall back to latest
+      setSelectedRevisionId(latestRevision?.id ?? null);
+      setSelectedRevision(latestRevision);
+    } else {
+      setSelectedRevisionId(revision.id);
+      setSelectedRevision(revision);
+    }
+  }, [latestRevision]);
+
+  // Reset selection when content changes
+  useEffect(() => {
+    setSelectedRevisionId(latestRevision?.id ?? null);
+    setSelectedRevision(latestRevision);
+  }, [contentId, latestRevision]);
+
   const loadContent = useCallback(async () => {
     if (!contentId || !session?.currentOrgId) return;
 
@@ -842,38 +864,57 @@ const startPolling = useCallback(() => {
               <h2 className="font-semibold text-gray-900">Revisions</h2>
             </div>
             <div className="divide-y divide-gray-200">
-              {revisions.map(rev => (
-                <button
-                  key={rev.id}
-                  onClick={() => {
-                    // For now, just show latest. Could add revision switching later.
-                  }}
-                  className={`w-full px-4 py-3 text-left hover:bg-gray-50 transition-colors ${rev.id === latestRevision?.id ? 'bg-blue-50' : ''}`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="font-medium text-gray-900">Revision {rev.version}</span>
-                      <span className="ml-2 text-xs text-gray-500">{new Date(rev.created_at).toLocaleString()}</span>
+              {revisions.map(rev => {
+                const isSelected = selectedRevisionId === rev.id;
+                const isLatest = latestRevision?.id === rev.id;
+                return (
+                  <button
+                    key={rev.id}
+                    onClick={() => handleSelectRevision(rev)}
+                    className={`w-full px-4 py-3 text-left hover:bg-gray-50 transition-colors ${
+                      isSelected ? 'bg-primary-50 border-l-2 border-primary' :
+                      isLatest ? 'bg-blue-50' :
+                      'hover:bg-gray-50'
+                    } transition-colors border-l-2 border-transparent`}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="font-medium text-gray-900">Revision {rev.version}</span>
+                        <span className="ml-2 text-xs text-gray-500">{new Date(rev.created_at).toLocaleString()}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {isLatest && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                            Latest
+                          </span>
+                        )}
+                        {isSelected && !isLatest && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary-100 text-primary-800">
+                            Viewing
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    {rev.id === latestRevision?.id && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
-                        Current
-                      </span>
-                    )}
-                  </div>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
           {/* Content body */}
           <div className="bg-white border border-gray-200 rounded-lg">
-            <div className="p-4 border-b border-gray-200">
+            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
               <h2 className="font-semibold text-gray-900">Content</h2>
+              {selectedRevisionId && selectedRevisionId !== latestRevision?.id && (
+                <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
+                  Viewing Revision {selectedRevision?.version} (not latest)
+                </span>
+              )}
             </div>
             <div className="p-6">
               <pre className="whitespace-pre-wrap font-mono text-sm text-gray-800 bg-gray-50 p-4 rounded-lg max-h-96 overflow-y-auto">
-                {latestRevision?.body || 'No content'}
+                {(selectedRevision?.body) || latestRevision?.body || 'No content'}
               </pre>
             </div>
           </div>

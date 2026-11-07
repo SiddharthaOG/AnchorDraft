@@ -644,6 +644,6 @@ describe('ContentDetail', () => {
       });
 
       expect(screen.queryByRole('button', { name: 'Submit for Review' })).not.toBeInTheDocument();
-    }, { timeout: 15000 });
+    });
   });
 });
