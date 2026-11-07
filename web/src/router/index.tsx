@@ -5,9 +5,14 @@ import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom'
 import { useAuth } from '../features/auth/AuthProvider';
 import Layout from '../components/Layout';
 import { CreatorLanding } from '../features/contents/CreatorLanding';
+import { ContentCreate } from '../features/contents/ContentCreate';
+import { ContentDetail } from '../features/contents/ContentDetail';
 import { ManagerLanding } from '../features/approvals/ManagerLanding';
 import { ReviewerLanding } from '../features/findings/ReviewerLanding';
 import { OwnerLanding } from '../features/kits/OwnerLanding';
+import { KitList } from '../features/kits/KitList';
+import { KitDetail } from '../features/kits/KitDetail';
+import { InsightsLanding } from '../features/insights/InsightsLanding';
 import { NoAccess } from '../components/NoAccess';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { AuthCallback } from '../features/auth/AuthCallback';
@@ -208,12 +213,47 @@ export const router = createBrowserRouter([
           </RoleRoute>
         ),
       },
-      // Owner (Guideline Owner) routes
+      // Content creation
+      {
+        path: 'contents/new',
+        element: (
+          <RoleRoute allowedRoles={['creator', 'manager', 'reviewer', 'owner']}>
+            <ContentCreate />
+          </RoleRoute>
+        ),
+      },
+      // Content detail and workflow
+      {
+        path: 'contents/:contentId',
+        element: (
+          <RoleRoute allowedRoles={['creator', 'manager', 'reviewer', 'owner']}>
+            <ContentDetail />
+          </RoleRoute>
+        ),
+      },
+      // Owner dashboard
+      {
+        path: 'owner',
+        element: (
+          <RoleRoute allowedRoles={['owner']}>
+            <OwnerLanding />
+          </RoleRoute>
+        ),
+      },
+      // Brand Kits management
       {
         path: 'kits',
         element: (
           <RoleRoute allowedRoles={['owner']}>
-            <OwnerLanding />
+            <KitList />
+          </RoleRoute>
+        ),
+      },
+      {
+        path: 'kits/:kitId',
+        element: (
+          <RoleRoute allowedRoles={['owner']}>
+            <KitDetail />
           </RoleRoute>
         ),
       },
@@ -232,6 +272,15 @@ export const router = createBrowserRouter([
         element: (
           <RoleRoute allowedRoles={['reviewer', 'owner']}>
             <ReviewerLanding />
+          </RoleRoute>
+        ),
+      },
+      // Insights routes (Owner, Manager, Reviewer)
+      {
+        path: 'insights',
+        element: (
+          <RoleRoute allowedRoles={['owner', 'manager', 'reviewer']}>
+            <InsightsLanding />
           </RoleRoute>
         ),
       },

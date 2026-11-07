@@ -9,9 +9,11 @@ export function Layout() {
 
   const navigation = [
     { path: '/', label: 'Dashboard', roles: ['creator', 'manager', 'reviewer', 'owner'] },
+    { path: '/owner', label: 'Owner Dashboard', roles: ['owner'] },
     { path: '/kits', label: 'Brand Kits', roles: ['owner'] },
     { path: '/approvals', label: 'Approvals', roles: ['manager', 'owner'] },
     { path: '/review', label: 'Review Queue', roles: ['reviewer', 'owner'] },
+    { path: '/insights', label: 'Insights', roles: ['owner', 'manager', 'reviewer'] },
   ];
 
   const visibleNav = navigation.filter(item => {
