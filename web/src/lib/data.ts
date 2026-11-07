@@ -419,6 +419,208 @@ export async function getRuleStats(orgId: string): Promise<RuleStat[]> {
   return data || [];
 }
 
+export interface ContentStatusDistribution {
+  draft: number;
+  submitted: number;
+  changes_requested: number;
+  approved: number;
+  total: number;
+}
+
+export async function getContentStatusDistribution(orgId: string): Promise<ContentStatusDistribution> {
+  const { data, error } = await supabase
+    .from('contents')
+    .select('status')
+    .eq('org_id', orgId);
+
+  if (error) {
+    throw new Error(`Failed to fetch content status distribution: ${error.message}`);
+  }
+
+  const distribution: ContentStatusDistribution = {
+    draft: 0,
+    submitted: 0,
+    changes_requested: 0,
+    approved: 0,
+    total: 0,
+  };
+
+  for (const row of data || []) {
+    distribution.total += 1;
+    switch (row.status) {
+      case 'draft':
+        distribution.draft += 1;
+        break;
+      case 'submitted':
+        distribution.submitted += 1;
+        break;
+      case 'changes_requested':
+        distribution.changes_requested += 1;
+        break;
+      case 'approved':
+        distribution.approved += 1;
+        break;
+    }
+  }
+
+  return distribution;
+}
+
+export interface ReviewMetrics {
+  total_reviews: number;
+  queued: number;
+  running: number;
+  done: number;
+  failed: number;
+  llm_ok: number;
+  llm_skipped: number;
+  llm_failed: number;
+  total_llm_findings_raw: number;
+  total_llm_findings_dropped: number;
+  validator_drop_rate: number;
+}
+
+export async function getReviewMetrics(orgId: string): Promise<ReviewMetrics> {
+  const { data, error } = await supabase
+    .from('reviews')
+    .select('status, llm_status, llm_findings_raw, llm_findings_dropped')
+    .eq('org_id', orgId);
+
+  if (error) {
+    throw new Error(`Failed to fetch review metrics: ${error.message}`);
+  }
+
+  const metrics: ReviewMetrics = {
+    total_reviews: 0,
+    queued: 0,
+    running: 0,
+    done: 0,
+    failed: 0,
+    llm_ok: 0,
+    llm_skipped: 0,
+    llm_failed: 0,
+    total_llm_findings_raw: 0,
+    total_llm_findings_dropped: 0,
+    validator_drop_rate: 0,
+  };
+
+  for (const row of data || []) {
+    metrics.total_reviews += 1;
+    switch (row.status) {
+      case 'queued':
+        metrics.queued += 1;
+        break;
+      case 'running':
+        metrics.running += 1;
+        break;
+      case 'done':
+        metrics.done += 1;
+        break;
+      case 'failed':
+        metrics.failed += 1;
+        break;
+    }
+    switch (row.llm_status) {
+      case 'ok':
+        metrics.llm_ok += 1;
+        break;
+      case 'skipped':
+        metrics.llm_skipped += 1;
+        break;
+      case 'failed':
+        metrics.llm_failed += 1;
+        break;
+    }
+    metrics.total_llm_findings_raw += row.llm_findings_raw || 0;
+    metrics.total_llm_findings_dropped += row.llm_findings_dropped || 0;
+  }
+
+  if (metrics.total_llm_findings_raw > 0) {
+    metrics.validator_drop_rate = Math.round(
+      (metrics.total_llm_findings_dropped / metrics.total_llm_findings_raw) * 10000
+    ) / 10000;
+  }
+
+  return metrics;
+}
+
+export interface FindingInsights {
+  total_findings: number;
+  accepted: number;
+  edited: number;
+  dismissed: number;
+  pending_decision: number;
+  by_rule: RuleStat[];
+  by_severity: Record<string, number>;
+  by_category: Record<string, number>;
+  dismissal_reasons: Array<{ reason: string; count: number }>;
+}
+
+export async function getFindingInsights(orgId: string): Promise<FindingInsights> {
+  const { data, error } = await supabase
+    .from('v_finding_state')
+    .select('*')
+    .eq('org_id', orgId);
+
+  if (error) {
+    throw new Error(`Failed to fetch finding insights: ${error.message}`);
+  }
+
+  const findings = data || [];
+
+  const insights: FindingInsights = {
+    total_findings: findings.length,
+    accepted: 0,
+    edited: 0,
+    dismissed: 0,
+    pending_decision: 0,
+    by_rule: [],
+    by_severity: {},
+    by_category: {},
+    dismissal_reasons: [],
+  };
+
+  const dismissalReasonCounts: Record<string, number> = {};
+
+  for (const f of findings) {
+    // Decision counts
+    switch (f.last_action) {
+      case 'accept':
+        insights.accepted += 1;
+        break;
+      case 'edit':
+        insights.edited += 1;
+        break;
+      case 'dismiss':
+        insights.dismissed += 1;
+        if (f.last_reason && f.last_reason.trim()) {
+          dismissalReasonCounts[f.last_reason.trim()] = (dismissalReasonCounts[f.last_reason.trim()] || 0) + 1;
+        }
+        break;
+      default:
+        insights.pending_decision += 1;
+        break;
+    }
+
+    // Severity distribution
+    insights.by_severity[f.severity] = (insights.by_severity[f.severity] || 0) + 1;
+
+    // Category distribution
+    insights.by_category[f.category] = (insights.by_category[f.category] || 0) + 1;
+  }
+
+  // Get rule-level stats from v_rule_stats
+  const ruleStats = await getRuleStats(orgId);
+  insights.by_rule = ruleStats;
+
+  // Convert dismissal reasons to sorted array
+  insights.dismissal_reasons = Object.entries(dismissalReasonCounts)
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count);
+
+  return insights;
+}
+
 // ============================================================
 // RPC function wrappers
 // ============================================================

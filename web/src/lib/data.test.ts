@@ -55,6 +55,9 @@ const {
   getFindingsWithDecisionsForReview,
   getPendingSignoffs,
   getRuleStats,
+  getContentStatusDistribution,
+  getReviewMetrics,
+  getFindingInsights,
   createContent,
   createRevision,
   recordDecision,
@@ -1091,5 +1094,327 @@ describe('startReview', () => {
 
     const result = await startReview('revision-1');
     expect(result).toEqual(deduplicatedResponse);
+  });
+});
+
+describe('Insights queries', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch.mockReset();
+  });
+
+  // Helper to create a thenable mock chain for array-returning queries
+  const createThenableMockChain = (resolveData: unknown) => {
+    const chain = createMockChain();
+    // Make the chain thenable by adding a then method that returns a resolved promise
+    chain.then = (onFulfilled?: (value: unknown) => unknown) => {
+      return Promise.resolve(resolveData).then(onFulfilled);
+    };
+    // Ensure select, eq, order return the chain for chaining
+    chain.select.mockReturnThis();
+    chain.eq.mockReturnThis();
+    chain.order.mockReturnThis();
+    chain.limit.mockReturnThis();
+    return chain;
+  };
+
+  describe('getContentStatusDistribution', () => {
+    it('returns distribution with all statuses', async () => {
+      const mockData = [
+        { status: 'draft' },
+        { status: 'submitted' },
+        { status: 'submitted' },
+        { status: 'changes_requested' },
+        { status: 'approved' },
+        { status: 'approved' },
+        { status: 'approved' },
+      ];
+      const mockChain = createThenableMockChain({ data: mockData, error: null });
+      mockFrom.mockReturnValueOnce(mockChain);
+
+      const result = await getContentStatusDistribution('org-1');
+
+      expect(mockFrom).toHaveBeenCalledWith('contents');
+      expect(mockChain.select).toHaveBeenCalledWith('status');
+      expect(mockChain.eq).toHaveBeenCalledWith('org_id', 'org-1');
+      expect(result).toEqual({
+        draft: 1,
+        submitted: 2,
+        changes_requested: 1,
+        approved: 3,
+        total: 7,
+      });
+    });
+
+    it('returns zero distribution when no content', async () => {
+      const mockChain = createThenableMockChain({ data: [], error: null });
+      mockFrom.mockReturnValueOnce(mockChain);
+
+      const result = await getContentStatusDistribution('org-1');
+
+      expect(result).toEqual({
+        draft: 0,
+        submitted: 0,
+        changes_requested: 0,
+        approved: 0,
+        total: 0,
+      });
+    });
+
+    it('throws on error', async () => {
+      const mockChain = createThenableMockChain({ data: null, error: { message: 'Query failed' } });
+      mockFrom.mockReturnValueOnce(mockChain);
+
+      await expect(getContentStatusDistribution('org-1')).rejects.toThrow(
+        'Failed to fetch content status distribution: Query failed'
+      );
+    });
+  });
+
+  describe('getReviewMetrics', () => {
+    it('returns metrics with all review statuses and LLM statuses', async () => {
+      const mockData = [
+        { status: 'done', llm_status: 'ok', llm_findings_raw: 10, llm_findings_dropped: 2 },
+        { status: 'done', llm_status: 'skipped', llm_findings_raw: 0, llm_findings_dropped: 0 },
+        { status: 'done', llm_status: 'failed', llm_findings_raw: 5, llm_findings_dropped: 5 },
+        { status: 'queued', llm_status: 'ok', llm_findings_raw: 0, llm_findings_dropped: 0 },
+        { status: 'running', llm_status: 'ok', llm_findings_raw: 0, llm_findings_dropped: 0 },
+        { status: 'failed', llm_status: 'failed', llm_findings_raw: 0, llm_findings_dropped: 0 },
+      ];
+      const mockChain = createThenableMockChain({ data: mockData, error: null });
+      mockFrom.mockReturnValueOnce(mockChain);
+
+      const result = await getReviewMetrics('org-1');
+
+      expect(mockFrom).toHaveBeenCalledWith('reviews');
+      expect(mockChain.select).toHaveBeenCalledWith('status, llm_status, llm_findings_raw, llm_findings_dropped');
+      expect(mockChain.eq).toHaveBeenCalledWith('org_id', 'org-1');
+      expect(result).toEqual({
+        total_reviews: 6,
+        queued: 1,
+        running: 1,
+        done: 3,
+        failed: 1,
+        llm_ok: 3,
+        llm_skipped: 1,
+        llm_failed: 2,
+        total_llm_findings_raw: 15,
+        total_llm_findings_dropped: 7,
+        validator_drop_rate: 0.4667,
+      });
+    });
+
+    it('returns zero metrics when no reviews', async () => {
+      const mockChain = createThenableMockChain({ data: [], error: null });
+      mockFrom.mockReturnValueOnce(mockChain);
+
+      const result = await getReviewMetrics('org-1');
+
+      expect(result).toEqual({
+        total_reviews: 0,
+        queued: 0,
+        running: 0,
+        done: 0,
+        failed: 0,
+        llm_ok: 0,
+        llm_skipped: 0,
+        llm_failed: 0,
+        total_llm_findings_raw: 0,
+        total_llm_findings_dropped: 0,
+        validator_drop_rate: 0,
+      });
+    });
+
+    it('calculates validator drop rate correctly', async () => {
+      const mockData = [
+        { status: 'done', llm_status: 'ok', llm_findings_raw: 100, llm_findings_dropped: 25 },
+      ];
+      const mockChain = createThenableMockChain({ data: mockData, error: null });
+      mockFrom.mockReturnValueOnce(mockChain);
+
+      const result = await getReviewMetrics('org-1');
+      expect(result.validator_drop_rate).toBe(0.25);
+    });
+
+    it('handles null llm_findings values', async () => {
+      const mockData = [
+        { status: 'done', llm_status: 'ok', llm_findings_raw: null, llm_findings_dropped: null },
+      ];
+      const mockChain = createThenableMockChain({ data: mockData, error: null });
+      mockFrom.mockReturnValueOnce(mockChain);
+
+      const result = await getReviewMetrics('org-1');
+      expect(result.total_llm_findings_raw).toBe(0);
+      expect(result.total_llm_findings_dropped).toBe(0);
+    });
+
+    it('throws on error', async () => {
+      const mockChain = createThenableMockChain({ data: null, error: { message: 'Query failed' } });
+      mockFrom.mockReturnValueOnce(mockChain);
+
+      await expect(getReviewMetrics('org-1')).rejects.toThrow(
+        'Failed to fetch review metrics: Query failed'
+      );
+    });
+  });
+
+  describe('getFindingInsights', () => {
+    const mockFindings = [
+      {
+        id: 'f1',
+        org_id: 'org-1',
+        review_id: 'r1',
+        ref_key: 'TERM-01',
+        category: 'terminology',
+        severity: 'low',
+        last_action: 'accept',
+        last_reason: null,
+      },
+      {
+        id: 'f2',
+        org_id: 'org-1',
+        review_id: 'r1',
+        ref_key: 'TERM-01',
+        category: 'terminology',
+        severity: 'low',
+        last_action: 'dismiss',
+        last_reason: 'Not applicable to this context',
+      },
+      {
+        id: 'f3',
+        org_id: 'org-1',
+        review_id: 'r1',
+        ref_key: 'CLAIM-01',
+        category: 'claim',
+        severity: 'high',
+        last_action: 'edit',
+        last_reason: null,
+      },
+      {
+        id: 'f4',
+        org_id: 'org-1',
+        review_id: 'r1',
+        ref_key: 'TONE-01',
+        category: 'tone',
+        severity: 'medium',
+        last_action: null,
+        last_reason: null,
+      },
+      {
+        id: 'f5',
+        org_id: 'org-1',
+        review_id: 'r1',
+        ref_key: 'A11Y-01',
+        category: 'accessibility',
+        severity: 'high',
+        last_action: 'dismiss',
+        last_reason: 'Fixed in revision',
+      },
+      {
+        id: 'f6',
+        org_id: 'org-1',
+        review_id: 'r1',
+        ref_key: 'A11Y-01',
+        category: 'accessibility',
+        severity: 'high',
+        last_action: 'dismiss',
+        last_reason: 'Fixed in revision',
+      },
+    ];
+
+    it('returns insights with correct decision counts and distributions', async () => {
+      // Mock v_finding_state query
+      const mockChain1 = createThenableMockChain({ data: mockFindings, error: null });
+      mockFrom.mockReturnValueOnce(mockChain1);
+
+      // Mock getRuleStats (v_rule_stats query)
+      const mockChain2 = createThenableMockChain({
+        data: [
+          { org_id: 'org-1', ref_key: 'TERM-01', category: 'terminology', findings: 2, dismissed: 1, acted_on: 1, dismissal_rate: 0.5, last_seen: '2026-11-01T00:00:00Z' },
+          { org_id: 'org-1', ref_key: 'CLAIM-01', category: 'claim', findings: 1, dismissed: 0, acted_on: 1, dismissal_rate: 0, last_seen: '2026-11-01T00:00:00Z' },
+          { org_id: 'org-1', ref_key: 'TONE-01', category: 'tone', findings: 1, dismissed: 0, acted_on: 0, dismissal_rate: 0, last_seen: '2026-11-01T00:00:00Z' },
+          { org_id: 'org-1', ref_key: 'A11Y-01', category: 'accessibility', findings: 2, dismissed: 2, acted_on: 0, dismissal_rate: 1, last_seen: '2026-11-01T00:00:00Z' },
+        ],
+        error: null,
+      });
+      mockFrom.mockReturnValueOnce(mockChain2);
+
+      const result = await getFindingInsights('org-1');
+
+      expect(result.total_findings).toBe(6);
+      expect(result.accepted).toBe(1);
+      expect(result.edited).toBe(1);
+      expect(result.dismissed).toBe(3);
+      expect(result.pending_decision).toBe(1);
+      expect(result.by_severity).toEqual({ low: 2, high: 3, medium: 1 });
+      expect(result.by_category).toEqual({ terminology: 2, claim: 1, tone: 1, accessibility: 2 });
+      expect(result.dismissal_reasons).toEqual([
+        { reason: 'Fixed in revision', count: 2 },
+        { reason: 'Not applicable to this context', count: 1 },
+      ]);
+      expect(result.by_rule).toHaveLength(4);
+    });
+
+    it('returns empty insights when no findings', async () => {
+      const mockChain1 = createThenableMockChain({ data: [], error: null });
+      mockFrom.mockReturnValueOnce(mockChain1);
+
+      const mockChain2 = createThenableMockChain({ data: [], error: null });
+      mockFrom.mockReturnValueOnce(mockChain2);
+
+      const result = await getFindingInsights('org-1');
+
+      expect(result).toEqual({
+        total_findings: 0,
+        accepted: 0,
+        edited: 0,
+        dismissed: 0,
+        pending_decision: 0,
+        by_rule: [],
+        by_severity: {},
+        by_category: {},
+        dismissal_reasons: [],
+      });
+    });
+
+    it('handles dismissal reasons with empty/null values', async () => {
+      const findingsWithEmptyReasons = [
+        { id: 'f1', org_id: 'org-1', review_id: 'r1', ref_key: 'TERM-01', category: 'terminology', severity: 'low', last_action: 'dismiss', last_reason: '' },
+        { id: 'f2', org_id: 'org-1', review_id: 'r1', ref_key: 'TERM-02', category: 'terminology', severity: 'low', last_action: 'dismiss', last_reason: null },
+        { id: 'f3', org_id: 'org-1', review_id: 'r1', ref_key: 'TERM-03', category: 'terminology', severity: 'low', last_action: 'dismiss', last_reason: '  ' },
+      ];
+
+      const mockChain1 = createThenableMockChain({ data: findingsWithEmptyReasons, error: null });
+      mockFrom.mockReturnValueOnce(mockChain1);
+
+      const mockChain2 = createThenableMockChain({ data: [], error: null });
+      mockFrom.mockReturnValueOnce(mockChain2);
+
+      const result = await getFindingInsights('org-1');
+
+      expect(result.dismissed).toBe(3);
+      expect(result.dismissal_reasons).toEqual([]);
+    });
+
+    it('throws on v_finding_state error', async () => {
+      const mockChain1 = createThenableMockChain({ data: null, error: { message: 'Query failed' } });
+      mockFrom.mockReturnValueOnce(mockChain1);
+
+      await expect(getFindingInsights('org-1')).rejects.toThrow(
+        'Failed to fetch finding insights: Query failed'
+      );
+    });
+
+    it('throws on v_rule_stats error', async () => {
+      const mockChain1 = createThenableMockChain({ data: [], error: null });
+      mockFrom.mockReturnValueOnce(mockChain1);
+
+      const mockChain2 = createThenableMockChain({ data: null, error: { message: 'Rule stats failed' } });
+      mockFrom.mockReturnValueOnce(mockChain2);
+
+      await expect(getFindingInsights('org-1')).rejects.toThrow(
+        'Failed to fetch rule stats: Rule stats failed'
+      );
+    });
   });
 });

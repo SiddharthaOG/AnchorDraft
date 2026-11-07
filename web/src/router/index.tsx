@@ -12,6 +12,7 @@ import { ReviewerLanding } from '../features/findings/ReviewerLanding';
 import { OwnerLanding } from '../features/kits/OwnerLanding';
 import { KitList } from '../features/kits/KitList';
 import { KitDetail } from '../features/kits/KitDetail';
+import { InsightsLanding } from '../features/insights/InsightsLanding';
 import { NoAccess } from '../components/NoAccess';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { AuthCallback } from '../features/auth/AuthCallback';
@@ -273,6 +274,15 @@ export const router = createBrowserRouter([
         element: (
           <RoleRoute allowedRoles={['reviewer', 'owner']}>
             <ReviewerLanding />
+          </RoleRoute>
+        ),
+      },
+      // Insights routes (Owner, Manager, Reviewer)
+      {
+        path: 'insights',
+        element: (
+          <RoleRoute allowedRoles={['owner', 'manager', 'reviewer']}>
+            <InsightsLanding />
           </RoleRoute>
         ),
       },
