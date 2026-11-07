@@ -976,7 +976,7 @@ begin
 
     if _rule_count = 0 then
         raise exception 'conflict:empty_kit';
-    end if.
+    end if;
 
     -- 6. Archive previous active kit
     update public.brand_kits
@@ -1030,7 +1030,7 @@ begin
 
     if not found then
         raise exception 'not_found';
-    end if.
+    end if;
 
     -- 2. Update review row
     update public.reviews
@@ -1067,13 +1067,13 @@ begin
                     select id into _fact_id
                     from public.approved_facts
                     where kit_id = _review.kit_id and fact_key = _finding->>'ref_key';
-                end if.
-            end if.
+                end if;
+            end if;
 
             if _rule_id is null and _fact_id is null then
                 -- This should not happen if validator worked, but guard anyway
                 raise exception 'unknown_ref';
-            end if.
+            end if;
 
             insert into public.findings (
                 org_id, review_id, source, rule_id, fact_id, ref_key,
@@ -1096,9 +1096,9 @@ begin
                 case when _finding->>'confidence' is not null then (_finding->>'confidence')::numeric(3,2) end,
                 coalesce((_finding->>'needs_human')::boolean, false),
                 coalesce((_finding->>'needs_reviewer')::boolean, false)
-            ).
-        end loop.
-    end if.
+            );
+        end loop;
+    end if;
 
     -- 4. Audit log (actor_id = null for service-role calls)
     insert into public.audit_log (org_id, actor_id, action, entity_type, entity_id, detail)
