@@ -9,7 +9,7 @@ class SupabaseJWTVerifier:
     """Verifies Supabase JWT tokens using JWKS."""
 
     # Explicit algorithm allowlist - never accept algorithm from token
-    ALLOWED_ALGORITHMS = ["RS256"]
+    ALLOWED_ALGORITHMS = ["RS256", "ES256"]
 
     def __init__(self):
         self._jwks_client: Optional[PyJWKClient] = None
