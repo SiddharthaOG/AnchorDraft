@@ -5,7 +5,7 @@ candidate findings (both deterministic and model-generated) to ensure
 they cite real rules/facts and quote real text from the revision.
 """
 
-from engine.app.validator.validator import (
+from app.validator.validator import (
     run_citation_validator,
     ValidationContext,
     RuleRecord,

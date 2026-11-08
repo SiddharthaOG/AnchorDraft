@@ -11,12 +11,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
-from engine.app.core.config import get_settings
-from engine.app.llm.provider import Provider
-from engine.app.llm.fake_provider import FakeProvider
-from engine.app.llm.groq_provider import GroqProvider
-from engine.app.llm.gemini_provider import GeminiProvider
-from engine.app.models.pipeline import (
+from app.core.config import get_settings
+from app.llm.provider import Provider
+from app.llm.fake_provider import FakeProvider
+from app.llm.groq_provider import GroqProvider
+from app.llm.gemini_provider import GeminiProvider
+from app.models.pipeline import (
     ProviderError,
     ProviderRequest,
     ProviderResult,
@@ -255,7 +255,7 @@ class ProviderWithFallback:
         Returns:
             True if fallback should be attempted, False otherwise.
         """
-        from engine.app.models.pipeline import (
+        from app.models.pipeline import (
             RateLimitedError,
             TimeoutError,
             UnavailableError,
@@ -306,7 +306,7 @@ class ProviderWithFallback:
         Returns:
             Safe category string.
         """
-        from engine.app.models.pipeline import (
+        from app.models.pipeline import (
             RateLimitedError,
             TimeoutError,
             UnavailableError,

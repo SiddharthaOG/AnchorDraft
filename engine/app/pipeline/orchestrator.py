@@ -11,28 +11,28 @@ import uuid
 from dataclasses import dataclass
 from typing import Optional
 
-from engine.app.auth.supabase import get_supabase_client
-from engine.app.checks import run_deterministic_checks, DeterministicCheckResult
-from engine.app.llm import get_provider_with_fallback
-from engine.app.models.pipeline import (
+from app.auth.supabase import get_supabase_client
+from app.checks import run_deterministic_checks, DeterministicCheckResult
+from app.llm import get_provider_with_fallback
+from app.models.pipeline import (
     ProviderRequest,
     ProviderResult,
 )
-from engine.app.llm.token_budget import TokenBudgetExceededError
-from engine.app.llm.prompt_builder import (
+from app.llm.token_budget import TokenBudgetExceededError
+from app.llm.prompt_builder import (
     build_provider_request,
     extract_offered_references,
     RuleData,
     FactData,
 )
-from engine.app.validator import (
+from app.validator import (
     run_citation_validator,
     ValidationContext,
     RuleRecord,
     FactRecord,
     AggregateValidationResult,
 )
-from engine.app.models.pipeline import (
+from app.models.pipeline import (
     ProviderError,
     RateLimitedError,
     TimeoutError,
@@ -42,8 +42,8 @@ from engine.app.models.pipeline import (
     ValidatedFinding,
     ModelFindingCandidate,
 )
-from engine.app.store.db import get_db_pool
-from engine.app.auth.supabase import SupabaseClient
+from app.store.db import get_db_pool
+from app.auth.supabase import SupabaseClient
 
 logger = logging.getLogger(__name__)
 
@@ -310,7 +310,7 @@ class ReviewOrchestrator:
             return [], [], None, None, 0, 0, ["llm_status = skipped: no model-checked rules or valid facts"]
 
         # Build prompt input
-        from engine.app.llm.prompt_builder import PromptInput
+        from app.llm.prompt_builder import PromptInput
         prompt_input = PromptInput(
             draft_text=text,
             purpose=purpose,
@@ -336,7 +336,7 @@ class ReviewOrchestrator:
                 raw_findings = []
 
             # Convert to ModelFindingCandidate
-            from engine.app.models.pipeline import ModelFindingCandidate
+            from app.models.pipeline import ModelFindingCandidate
             model_candidates = []
             for f in raw_findings:
                 try:

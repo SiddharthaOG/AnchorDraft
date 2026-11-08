@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import List, Optional, Literal
 
-from engine.app.models.pipeline import (
+from app.models.pipeline import (
     ProviderRequest,
     ModelFindingCandidate,
 )

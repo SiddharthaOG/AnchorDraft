@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from groq import AsyncGroq
 from groq.types.chat import ChatCompletion
 
-from engine.app.models.pipeline import (
+from app.models.pipeline import (
     ProviderError,
     ProviderRequest,
     ProviderResult,
@@ -23,7 +23,7 @@ from engine.app.models.pipeline import (
     BadOutputError,
     BlockedError,
 )
-from engine.app.llm.token_budget import estimate_tokens, TokenBudgetExceededError
+from app.llm.token_budget import estimate_tokens, TokenBudgetExceededError
 
 logger = logging.getLogger(__name__)
 
@@ -246,7 +246,7 @@ class GroqProvider:
             raise BadOutputError("'findings' must be an array")
 
         # Validate each finding against ModelFindingCandidate
-        from engine.app.models.pipeline import ModelFindingCandidate
+        from app.models.pipeline import ModelFindingCandidate
         for i, finding in enumerate(findings):
             try:
                 ModelFindingCandidate.model_validate(finding)

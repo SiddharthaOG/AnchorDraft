@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Set, Dict, Literal
 from datetime import date
 
-from engine.app.models.pipeline import (
+from app.models.pipeline import (
     ModelFindingCandidate,
     DeterministicFindingCandidate,
     ValidatedFinding,

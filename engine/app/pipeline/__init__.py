@@ -4,7 +4,7 @@ This module provides the main pipeline orchestration service that connects
 all review engine components into a complete execution flow.
 """
 
-from engine.app.pipeline.orchestrator import (
+from app.pipeline.orchestrator import (
     ReviewOrchestrator,
     run_review_pipeline,
 )

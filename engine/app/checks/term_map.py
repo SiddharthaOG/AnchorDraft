@@ -6,13 +6,13 @@ occurrence of an avoided term with the preferred term as suggestion.
 
 from typing import List
 
-from engine.app.checks.deterministic import (
+from app.checks.deterministic import (
     DeterministicCheck,
     RuleConfig,
     find_word_boundary_matches,
     match_first_letter_case,
 )
-from engine.app.models.pipeline import DeterministicFindingCandidate
+from app.models.pipeline import DeterministicFindingCandidate
 
 
 class TermMapCheck(DeterministicCheck):

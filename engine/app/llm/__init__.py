@@ -5,8 +5,8 @@ interacting with LLM providers. The FakeProvider is used for testing,
 while real providers (Groq, Gemini) are used in production.
 """
 
-from engine.app.llm.provider import Provider
-from engine.app.llm.fake_provider import (
+from app.llm.provider import Provider
+from app.llm.fake_provider import (
     FakeProviderConfig,
     FakeProvider,
     create_rate_limited_failure,
@@ -15,9 +15,9 @@ from engine.app.llm.fake_provider import (
     create_bad_output_failure,
     create_blocked_failure,
 )
-from engine.app.llm.groq_provider import GroqProvider
-from engine.app.llm.gemini_provider import GeminiProvider
-from engine.app.llm.provider_factory import (
+from app.llm.groq_provider import GroqProvider
+from app.llm.gemini_provider import GeminiProvider
+from app.llm.provider_factory import (
     ProviderType,
     ProviderSettings,
     ProviderConfigError,
@@ -28,14 +28,14 @@ from engine.app.llm.provider_factory import (
     ProviderWithFallback,
     load_provider_settings,
 )
-from engine.app.llm.token_budget import (
+from app.llm.token_budget import (
     estimate_tokens,
     estimate_request_tokens,
     check_token_budget,
     TokenBudgetExceededError,
     TokenEstimate,
 )
-from engine.app.llm.prompt_builder import (
+from app.llm.prompt_builder import (
     PromptInput,
     RuleData,
     FactData,

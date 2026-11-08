@@ -6,7 +6,7 @@ This module defines the abstract interface that all LLM providers must implement
 from abc import ABC, abstractmethod
 from typing import Protocol
 
-from engine.app.models.pipeline import ProviderRequest, ProviderResult
+from app.models.pipeline import ProviderRequest, ProviderResult
 
 
 class Provider(Protocol):

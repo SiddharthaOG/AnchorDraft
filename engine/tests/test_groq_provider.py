@@ -4,9 +4,9 @@ import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from engine.app.llm.groq_provider import GroqProvider
-from engine.app.llm.token_budget import TokenBudgetExceededError
-from engine.app.models.pipeline import (
+from app.llm.groq_provider import GroqProvider
+from app.llm.token_budget import TokenBudgetExceededError
+from app.models.pipeline import (
     ProviderRequest,
     ProviderResult,
     ModelFindingCandidate,

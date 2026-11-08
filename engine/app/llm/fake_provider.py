@@ -9,7 +9,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from engine.app.models.pipeline import (
+from app.models.pipeline import (
     ProviderRequest,
     ProviderResult,
     ProviderError,

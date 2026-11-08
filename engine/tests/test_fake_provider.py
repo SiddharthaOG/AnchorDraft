@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from engine.app.llm import (
+from app.llm import (
     Provider,
     FakeProviderConfig,
     FakeProvider,
@@ -13,7 +13,7 @@ from engine.app.llm import (
     create_bad_output_failure,
     create_blocked_failure,
 )
-from engine.app.models.pipeline import (
+from app.models.pipeline import (
     ProviderRequest,
     ProviderResult,
     ModelFindingCandidate,

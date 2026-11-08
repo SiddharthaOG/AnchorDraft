@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from engine.app.llm.provider_factory import (
+from app.llm.provider_factory import (
     ProviderType,
     ProviderSettings,
     ProviderConfigError,
@@ -15,10 +15,10 @@ from engine.app.llm.provider_factory import (
     ProviderWithFallback,
     load_provider_settings,
 )
-from engine.app.llm.fake_provider import FakeProvider
-from engine.app.llm.groq_provider import GroqProvider
-from engine.app.llm.gemini_provider import GeminiProvider
-from engine.app.models.pipeline import (
+from app.llm.fake_provider import FakeProvider
+from app.llm.groq_provider import GroqProvider
+from app.llm.gemini_provider import GeminiProvider
+from app.models.pipeline import (
     ProviderRequest,
     ProviderResult,
     RateLimitedError,
@@ -28,7 +28,7 @@ from engine.app.models.pipeline import (
     BadOutputError,
     ProviderError,
 )
-from engine.app.llm.token_budget import TokenBudgetExceededError
+from app.llm.token_budget import TokenBudgetExceededError
 
 
 # ============================================================================

@@ -1,7 +1,7 @@
 """Tests for the pipeline models."""
 import pytest
 from pydantic import ValidationError
-from engine.app.models.pipeline import (
+from app.models.pipeline import (
     ModelFindingCandidate,
     DeterministicFindingCandidate,
     ValidatedFinding,

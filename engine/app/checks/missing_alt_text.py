@@ -6,12 +6,12 @@ Produces a finding for each image that violates the policy.
 
 from typing import List
 
-from engine.app.checks.deterministic import (
+from app.checks.deterministic import (
     DeterministicCheck,
     RuleConfig,
     find_markdown_images,
 )
-from engine.app.models.pipeline import DeterministicFindingCandidate
+from app.models.pipeline import DeterministicFindingCandidate
 
 
 class MissingAltTextCheck(DeterministicCheck):

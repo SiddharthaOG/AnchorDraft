@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from engine.app.models.pipeline import DeterministicFindingCandidate
+from app.models.pipeline import DeterministicFindingCandidate
 
 
 # Module-level check type registry for extensibility and testing
@@ -275,10 +275,10 @@ def run_deterministic_checks(
 
 
 # Import at bottom to avoid circular imports
-from engine.app.checks.term_map import TermMapCheck
-from engine.app.checks.phrase_list import PhraseListCheck
-from engine.app.checks.missing_alt_text import MissingAltTextCheck
-from engine.app.checks.required_disclosure import RequiredDisclosureCheck
+from app.checks.term_map import TermMapCheck
+from app.checks.phrase_list import PhraseListCheck
+from app.checks.missing_alt_text import MissingAltTextCheck
+from app.checks.required_disclosure import RequiredDisclosureCheck
 
 # Populate module-level check_map after imports
 check_map["term_map"] = TermMapCheck

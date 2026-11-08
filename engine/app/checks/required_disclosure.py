@@ -6,12 +6,12 @@ phrases must also be present in the text.
 
 from typing import List, Set
 
-from engine.app.checks.deterministic import (
+from app.checks.deterministic import (
     DeterministicCheck,
     RuleConfig,
     find_word_boundary_matches,
 )
-from engine.app.models.pipeline import DeterministicFindingCandidate
+from app.models.pipeline import DeterministicFindingCandidate
 
 
 class RequiredDisclosureCheck(DeterministicCheck):

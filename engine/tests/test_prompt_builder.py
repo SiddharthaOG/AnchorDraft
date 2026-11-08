@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import date, timedelta, datetime, timezone
-from engine.app.llm import (
+from app.llm import (
     PromptInput,
     RuleData,
     FactData,
@@ -19,8 +19,8 @@ from engine.app.llm import (
     MAX_FINDINGS_CAP,
     OUTPUT_SCHEMA,
 )
-from engine.app.llm.prompt_builder import build_user_content
-from engine.app.models.pipeline import ProviderRequest, ModelFindingCandidate
+from app.llm.prompt_builder import build_user_content
+from app.models.pipeline import ProviderRequest, ModelFindingCandidate
 
 
 # ============================================================================
