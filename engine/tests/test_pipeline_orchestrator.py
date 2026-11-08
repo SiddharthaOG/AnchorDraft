@@ -12,11 +12,11 @@ from uuid import uuid4
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from engine.app.pipeline.orchestrator import (
+from app.pipeline.orchestrator import (
     ReviewOrchestrator,
     reclaim_stale_reviews,
 )
-from engine.app.models.pipeline import (
+from app.models.pipeline import (
     ProviderRequest,
     ProviderResult,
     ModelFindingCandidate,
@@ -30,8 +30,8 @@ from engine.app.models.pipeline import (
     BlockedError,
     ProviderError,
 )
-from engine.app.llm.token_budget import TokenBudgetExceededError
-from engine.app.llm.prompt_builder import RuleData, FactData
+from app.llm.token_budget import TokenBudgetExceededError
+from app.llm.prompt_builder import RuleData, FactData
 
 
 # ============================================================================
@@ -92,7 +92,7 @@ def make_pipeline_input(
     engine_version: str = "0.1.0",
 ) -> "PipelineInput":
     """Create a PipelineInput for testing."""
-    from engine.app.pipeline.orchestrator import PipelineInput
+    from app.pipeline.orchestrator import PipelineInput
     return PipelineInput(
         review_id=review_id or str(uuid4()),
         revision_id=revision_id or str(uuid4()),
@@ -260,8 +260,8 @@ class TestSupabaseDataLoader:
     @pytest.mark.asyncio
     async def test_load_rules_and_facts_includes_needs_reviewer(self):
         """Test that load_rules_and_facts loads needs_reviewer from DB."""
-        from engine.app.pipeline.orchestrator import SupabaseDataLoader
-        from engine.app.llm.prompt_builder import RuleData
+        from app.pipeline.orchestrator import SupabaseDataLoader
+        from app.llm.prompt_builder import RuleData
 
         loader = SupabaseDataLoader()
         
@@ -310,9 +310,9 @@ class TestValidatorIntegration:
     @pytest.mark.asyncio
     async def test_rule_with_needs_reviewer_true_propagates_to_finding(self):
         """Test that a rule with needs_reviewer=True produces a finding with needs_reviewer=True."""
-        from engine.app.validator import run_citation_validator
-        from engine.app.models.pipeline import DeterministicFindingCandidate
-        from engine.app.validator.validator import ValidationContext, RuleRecord
+        from app.validator import run_citation_validator
+        from app.models.pipeline import DeterministicFindingCandidate
+        from app.validator.validator import ValidationContext, RuleRecord
 
         # Create a rule with needs_reviewer=True
         rule = RuleRecord(
@@ -356,9 +356,9 @@ class TestValidatorIntegration:
     @pytest.mark.asyncio
     async def test_rule_with_needs_reviewer_false_remains_false(self):
         """Test that a rule with needs_reviewer=False remains false."""
-        from engine.app.validator import run_citation_validator
-        from engine.app.models.pipeline import DeterministicFindingCandidate
-        from engine.app.validator.validator import ValidationContext, RuleRecord
+        from app.validator import run_citation_validator
+        from app.models.pipeline import DeterministicFindingCandidate
+        from app.validator.validator import ValidationContext, RuleRecord
 
         rule = RuleRecord(
             rule_key="TERM-01",
@@ -400,9 +400,9 @@ class TestValidatorIntegration:
     @pytest.mark.asyncio
     async def test_fact_finding_retains_reviewer_requirement(self):
         """Test that fact findings retain their reviewer requirement."""
-        from engine.app.validator import run_citation_validator
-        from engine.app.models.pipeline import ModelFindingCandidate
-        from engine.app.validator.validator import ValidationContext, FactRecord
+        from app.validator import run_citation_validator
+        from app.models.pipeline import ModelFindingCandidate
+        from app.validator.validator import ValidationContext, FactRecord
 
         fact = FactRecord(
             fact_key="FACT-01",
@@ -440,9 +440,9 @@ class TestValidatorIntegration:
     @pytest.mark.asyncio
     async def test_missing_null_needs_reviewer_defaults_to_false(self):
         """Test that missing/null needs_reviewer in DB defaults to False."""
-        from engine.app.validator import run_citation_validator
-        from engine.app.models.pipeline import DeterministicFindingCandidate
-        from engine.app.validator.validator import ValidationContext, RuleRecord
+        from app.validator import run_citation_validator
+        from app.models.pipeline import DeterministicFindingCandidate
+        from app.validator.validator import ValidationContext, RuleRecord
 
         # Rule without explicit needs_reviewer (simulating DB NULL)
         rule = RuleRecord(
@@ -550,13 +550,13 @@ class TestStaleJobRecovery:
     @pytest.mark.asyncio
     async def test_stale_job_detection(self):
         """Test that stale running reviews are detected and reclaimed."""
-        from engine.app.pipeline.orchestrator import reclaim_stale_reviews
+        from app.pipeline.orchestrator import reclaim_stale_reviews
         
         # Create a mock connection that returns 3 when fetchval is called
         mock_conn = AsyncConnectionMock(fetchval_return=3)
         mock_pool = DatabasePoolMock(connection=mock_conn)
         
-        with patch('engine.app.pipeline.orchestrator.get_db_pool', return_value=mock_pool):
+        with patch('app.pipeline.orchestrator.get_db_pool', return_value=mock_pool):
             reclaimed = await reclaim_stale_reviews(lease_minutes=10)
             assert reclaimed == 3
             mock_conn.fetchval.assert_called_once_with("SELECT reclaim_stale_reviews($1)", 10)
@@ -564,8 +564,8 @@ class TestStaleJobRecovery:
     @pytest.mark.asyncio
     async def test_stale_worker_fencing_on_complete(self):
         """Test that stale workers cannot complete a reclaimed job."""
-        from engine.app.pipeline.orchestrator import ReviewOrchestrator
-        from engine.app.models.pipeline import AggregateValidationResult, ValidatedFinding
+        from app.pipeline.orchestrator import ReviewOrchestrator
+        from app.models.pipeline import AggregateValidationResult, ValidatedFinding
         
         orchestrator = ReviewOrchestrator()
         
@@ -1119,7 +1119,7 @@ class TestNullTokenRejection:
     @pytest.mark.asyncio
     async def test_python_rejects_none_claim_token_on_complete(self):
         """Test that Python raises error if claim_token is None on completion."""
-        from engine.app.pipeline.orchestrator import ReviewOrchestrator
+        from app.pipeline.orchestrator import ReviewOrchestrator
         
         orchestrator = ReviewOrchestrator()
         validation_result = MagicMock()
@@ -1152,7 +1152,7 @@ class TestNullTokenRejection:
     @pytest.mark.asyncio
     async def test_python_passes_token_on_failure(self):
         """Test that Python passes the claim_token on failure path."""
-        from engine.app.pipeline.orchestrator import ReviewOrchestrator
+        from app.pipeline.orchestrator import ReviewOrchestrator
         
         orchestrator = ReviewOrchestrator()
         claim_token = uuid4()
@@ -1174,7 +1174,7 @@ class TestNullTokenRejection:
     @pytest.mark.asyncio
     async def test_python_passes_token_on_success(self):
         """Test that Python passes the claim_token on success path."""
-        from engine.app.pipeline.orchestrator import ReviewOrchestrator
+        from app.pipeline.orchestrator import ReviewOrchestrator
         
         orchestrator = ReviewOrchestrator()
         claim_token = uuid4()

@@ -7,7 +7,7 @@ This module implements the four Tier 1 and Tier 2 deterministic check types:
 - required_disclosure: enforces disclosure phrases when triggers appear
 """
 
-from engine.app.checks.deterministic import (
+from app.checks.deterministic import (
     run_deterministic_checks,
     DeterministicCheck,
     DeterministicCheckResult,
@@ -15,10 +15,10 @@ from engine.app.checks.deterministic import (
     RuleConfig,
 )
 
-from engine.app.checks.term_map import TermMapCheck
-from engine.app.checks.phrase_list import PhraseListCheck
-from engine.app.checks.missing_alt_text import MissingAltTextCheck
-from engine.app.checks.required_disclosure import RequiredDisclosureCheck
+from app.checks.term_map import TermMapCheck
+from app.checks.phrase_list import PhraseListCheck
+from app.checks.missing_alt_text import MissingAltTextCheck
+from app.checks.required_disclosure import RequiredDisclosureCheck
 
 __all__ = [
     "run_deterministic_checks",

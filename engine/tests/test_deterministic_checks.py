@@ -1,7 +1,7 @@
 """Tests for deterministic checks."""
 
 import pytest
-from engine.app.checks import (
+from app.checks import (
     run_deterministic_checks,
     TermMapCheck,
     PhraseListCheck,
@@ -10,8 +10,8 @@ from engine.app.checks import (
     DeterministicCheckResult,
     SkippedCheck,
 )
-from engine.app.checks.deterministic import RuleConfig, check_map
-from engine.app.models.pipeline import DeterministicFindingCandidate
+from app.checks.deterministic import RuleConfig, check_map
+from app.models.pipeline import DeterministicFindingCandidate
 
 
 # =============================================================================

@@ -2,14 +2,14 @@
 
 import pytest
 from datetime import date
-from engine.app.models.pipeline import (
+from app.models.pipeline import (
     ModelFindingCandidate,
     DeterministicFindingCandidate,
     ValidatedFinding,
     AggregateValidationResult,
 )
 from pydantic import ValidationError
-from engine.app.validator import (
+from app.validator import (
     run_citation_validator,
     ValidationContext,
     RuleRecord,

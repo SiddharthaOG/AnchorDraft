@@ -17,8 +17,8 @@ from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4, UUID
 
-from engine.app.pipeline.orchestrator import ReviewOrchestrator, PipelineInput
-from engine.app.llm import (
+from app.pipeline.orchestrator import ReviewOrchestrator, PipelineInput
+from app.llm import (
     FakeProvider,
     FakeProviderConfig,
     ProviderWithFallback,
@@ -29,8 +29,8 @@ from engine.app.llm import (
     create_bad_output_failure,
     create_blocked_failure,
 )
-from engine.app.llm.provider_factory import ProviderSettings, ProviderType
-from engine.app.models.pipeline import (
+from app.llm.provider_factory import ProviderSettings, ProviderType
+from app.models.pipeline import (
     ProviderRequest,
     ProviderResult,
     ModelFindingCandidate,
@@ -44,7 +44,7 @@ from engine.app.models.pipeline import (
     BlockedError,
     ProviderError,
 )
-from engine.app.llm.prompt_builder import (
+from app.llm.prompt_builder import (
     build_provider_request,
     PromptInput,
     RuleData,
@@ -54,9 +54,9 @@ from engine.app.llm.prompt_builder import (
     render_rules_block,
     render_facts_block,
 )
-from engine.app.validator import run_citation_validator, ValidationContext, RuleRecord, FactRecord
-from engine.app.checks import run_deterministic_checks, TermMapCheck, PhraseListCheck
-from engine.app.checks.deterministic import RuleConfig
+from app.validator import run_citation_validator, ValidationContext, RuleRecord, FactRecord
+from app.checks import run_deterministic_checks, TermMapCheck, PhraseListCheck
+from app.checks.deterministic import RuleConfig
 
 
 # ============================================================================
@@ -371,7 +371,7 @@ class TestProviderFallbackAndFailureClassification:
     @pytest.mark.asyncio
     async def test_no_fallback_on_config_error(self):
         """Test that config errors do not trigger fallback."""
-        from engine.app.llm.provider_factory import ProviderConfigError
+        from app.llm.provider_factory import ProviderConfigError
         
         primary = MagicMock()
         primary.model = "primary-model"
@@ -749,7 +749,7 @@ class TestPersistenceAndClaimOwnership:
     @pytest.mark.asyncio
     async def test_successful_completion_persists_with_claim_token(self):
         """Test that successful completion persists review with claim token."""
-        from engine.app.pipeline.orchestrator import ReviewOrchestrator
+        from app.pipeline.orchestrator import ReviewOrchestrator
         
         review_id = str(uuid4())
         claim_token = uuid4()
@@ -809,7 +809,7 @@ class TestPersistenceAndClaimOwnership:
     @pytest.mark.asyncio
     async def test_failure_persistence_uses_failure_rpc(self):
         """Test that failure persistence uses the failure RPC with claim token."""
-        from engine.app.pipeline.orchestrator import ReviewOrchestrator
+        from app.pipeline.orchestrator import ReviewOrchestrator
         
         review_id = str(uuid4())
         claim_token = uuid4()
@@ -834,7 +834,7 @@ class TestPersistenceAndClaimOwnership:
     @pytest.mark.asyncio
     async def test_active_claim_token_propagated_on_success(self):
         """Test that active claim token is propagated to completion RPC."""
-        from engine.app.pipeline.orchestrator import ReviewOrchestrator
+        from app.pipeline.orchestrator import ReviewOrchestrator
         
         review_id = str(uuid4())
         claim_token = uuid4()
@@ -875,7 +875,7 @@ class TestPersistenceAndClaimOwnership:
     @pytest.mark.asyncio
     async def test_null_claim_token_rejected_on_complete(self):
         """Test that NULL claim token is rejected on completion."""
-        from engine.app.pipeline.orchestrator import ReviewOrchestrator
+        from app.pipeline.orchestrator import ReviewOrchestrator
         
         review_id = str(uuid4())
         
@@ -914,7 +914,7 @@ class TestPersistenceAndClaimOwnership:
     @pytest.mark.asyncio
     async def test_mismatched_claim_token_rejected(self):
         """Test that mismatched claim token is rejected."""
-        from engine.app.pipeline.orchestrator import ReviewOrchestrator
+        from app.pipeline.orchestrator import ReviewOrchestrator
         
         review_id = str(uuid4())
         original_token = uuid4()
@@ -1005,7 +1005,7 @@ class TestRecoveryBehavior:
     @pytest.mark.asyncio
     async def test_stale_reviews_eligible_for_reclamation(self):
         """Test that stale running reviews are eligible for reclamation."""
-        from engine.app.pipeline.orchestrator import reclaim_stale_reviews
+        from app.pipeline.orchestrator import reclaim_stale_reviews
         
         mock_conn = MagicMock()
         mock_conn.fetchval = AsyncMock(return_value=3)
@@ -1013,7 +1013,7 @@ class TestRecoveryBehavior:
         mock_pool.pool.acquire.return_value.__aenter__.return_value = mock_conn
         mock_pool.pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
         
-        with patch('engine.app.pipeline.orchestrator.get_db_pool', return_value=mock_pool):
+        with patch('app.pipeline.orchestrator.get_db_pool', return_value=mock_pool):
             reclaimed = await reclaim_stale_reviews(lease_minutes=30)
             assert reclaimed == 3
             mock_conn.fetchval.assert_called_once_with("SELECT reclaim_stale_reviews($1)", 30)
@@ -1021,7 +1021,7 @@ class TestRecoveryBehavior:
     @pytest.mark.asyncio
     async def test_lease_period_configuration(self):
         """Test that lease period is configurable (default 30 minutes)."""
-        from engine.app.pipeline.orchestrator import reclaim_stale_reviews
+        from app.pipeline.orchestrator import reclaim_stale_reviews
         
         mock_conn = MagicMock()
         mock_conn.fetchval = AsyncMock(return_value=1)
@@ -1029,7 +1029,7 @@ class TestRecoveryBehavior:
         mock_pool.pool.acquire.return_value.__aenter__.return_value = mock_conn
         mock_pool.pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
         
-        with patch('engine.app.pipeline.orchestrator.get_db_pool', return_value=mock_pool):
+        with patch('app.pipeline.orchestrator.get_db_pool', return_value=mock_pool):
             # Default lease (30 minutes)
             await reclaim_stale_reviews()
             mock_conn.fetchval.assert_called_with("SELECT reclaim_stale_reviews($1)", 30)
@@ -1363,12 +1363,12 @@ class TestFullPipelineOrchestration:
         It does not independently test the implementations of the deterministic
         checker, model/provider analysis, citation validator, or persistence RPC.
         """
-        from engine.app.pipeline.orchestrator import ReviewOrchestrator, PipelineInput
-        from engine.app.llm.prompt_builder import PromptInput
-        from engine.app.llm.token_budget import TokenBudgetExceededError
-        from engine.app.checks.deterministic import DeterministicCheckResult, SkippedCheck
-        from engine.app.models.pipeline import ModelFindingCandidate
-        from engine.app.validator import AggregateValidationResult
+        from app.pipeline.orchestrator import ReviewOrchestrator, PipelineInput
+        from app.llm.prompt_builder import PromptInput
+        from app.llm.token_budget import TokenBudgetExceededError
+        from app.checks.deterministic import DeterministicCheckResult, SkippedCheck
+        from app.models.pipeline import ModelFindingCandidate
+        from app.validator import AggregateValidationResult
 
         review_id = str(uuid4())
         revision_id = str(uuid4())
@@ -1586,7 +1586,7 @@ class TestFullPipelineOrchestration:
         output_tokens = 200
         model_warnings = []
 
-        from engine.app.models.pipeline import ValidatedFinding
+        from app.models.pipeline import ValidatedFinding
         validated_findings = [
             ValidatedFinding(
                 source="deterministic",
