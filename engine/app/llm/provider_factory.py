@@ -65,7 +65,7 @@ def load_provider_settings() -> ProviderSettings:
         ProviderSettings with all configuration values.
 
     Raises:
-        ProviderConfigError: If provider configuration is invalid for production.
+        ProviderConfigError: If provider configuration is invalid for the environment.
     """
     settings = get_settings()
 
@@ -74,45 +74,60 @@ def load_provider_settings() -> ProviderSettings:
     try:
         provider_type = ProviderType(provider_str)
     except ValueError:
-        # In production, fail closed on unknown provider
-        env = getattr(settings, "ENVIRONMENT", "development").lower()
-        if env in ("production", "prod"):
+        # Unknown provider: allow in local environments (default to fake), reject in non-local
+        if settings.is_local_environment:
+            logger.warning(
+                "unknown_provider_type",
+                extra={"provider": provider_str, "defaulting_to": "fake", "environment": settings.ENVIRONMENT},
+            )
+            provider_type = ProviderType.FAKE
+        else:
             raise ProviderConfigError(
                 f"Unknown provider type: '{provider_str}'. Valid options: {[p.value for p in ProviderType]}"
             )
-        logger.warning(
-            "unknown_provider_type",
-            extra={"provider": provider_str, "defaulting_to": "fake"},
+
+    # Reject fake provider in non-local environments
+    if provider_type == ProviderType.FAKE and settings.requires_real_provider:
+        raise ProviderConfigError(
+            f"Fake provider is not allowed in {settings.ENVIRONMENT} environment. "
+            f"Use a real provider (groq or gemini)."
         )
-        provider_type = ProviderType.FAKE
 
     # Determine fallback provider
     fallback_str = getattr(settings, "LLM_FALLBACK_PROVIDER", "gemini").lower()
     try:
         fallback_provider = ProviderType(fallback_str)
     except ValueError:
-        env = getattr(settings, "ENVIRONMENT", "development").lower()
-        if env in ("production", "prod"):
+        # Unknown fallback: allow in local environments (default to gemini), reject in non-local
+        if settings.is_local_environment:
+            logger.warning(
+                "unknown_fallback_provider",
+                extra={"provider": fallback_str, "defaulting_to": "gemini", "environment": settings.ENVIRONMENT},
+            )
+            fallback_provider = ProviderType.GEMINI
+        else:
             raise ProviderConfigError(
                 f"Unknown fallback provider: '{fallback_str}'. Valid options: {[p.value for p in ProviderType]}"
             )
-        logger.warning(
-            "unknown_fallback_provider",
-            extra={"provider": fallback_str, "defaulting_to": "gemini"},
-        )
-        fallback_provider = ProviderType.GEMINI
 
-    # In production, require real API keys for non-fake providers
-    env = getattr(settings, "ENVIRONMENT", "development").lower()
-    if env in ("production", "prod"):
+    # Reject fake fallback in non-local environments when fallback is enabled
+    fallback_enabled = getattr(settings, "LLM_FALLBACK_ENABLED", True)
+    if fallback_provider == ProviderType.FAKE and fallback_enabled and settings.requires_real_provider:
+        raise ProviderConfigError(
+            f"Fake fallback provider is not allowed in {settings.ENVIRONMENT} environment. "
+            f"Use a real fallback provider (groq or gemini) or disable fallback."
+        )
+
+    # In non-local environments, require real API keys for configured providers
+    if settings.requires_real_provider:
         if provider_type == ProviderType.GROQ and not getattr(settings, "GROQ_API_KEY", ""):
-            raise ProviderConfigError("GROQ_API_KEY is required for Groq provider in production")
+            raise ProviderConfigError("GROQ_API_KEY is required for Groq provider in non-local environment")
         if provider_type == ProviderType.GEMINI and not getattr(settings, "GEMINI_API_KEY", ""):
-            raise ProviderConfigError("GEMINI_API_KEY is required for Gemini provider in production")
+            raise ProviderConfigError("GEMINI_API_KEY is required for Gemini provider in non-local environment")
         if fallback_provider == ProviderType.GROQ and not getattr(settings, "GROQ_API_KEY", ""):
-            raise ProviderConfigError("GROQ_API_KEY is required for Groq fallback in production")
+            raise ProviderConfigError("GROQ_API_KEY is required for Groq fallback in non-local environment")
         if fallback_provider == ProviderType.GEMINI and not getattr(settings, "GEMINI_API_KEY", ""):
-            raise ProviderConfigError("GEMINI_API_KEY is required for Gemini fallback in production")
+            raise ProviderConfigError("GEMINI_API_KEY is required for Gemini fallback in non-local environment")
 
     return ProviderSettings(
         provider_type=provider_type,
@@ -139,12 +154,20 @@ def create_provider(settings: Optional[ProviderSettings] = None) -> Provider:
         Provider instance.
 
     Raises:
-        ProviderConfigError: If required credentials are missing.
+        ProviderConfigError: If required credentials are missing or fake provider used in non-local environment.
     """
     if settings is None:
         settings = load_provider_settings()
 
+    # Defensive check: fake provider should not be created in non-local environments
     if settings.provider_type == ProviderType.FAKE:
+        # Check if we're in a non-local environment by reloading settings
+        from app.core.config import get_settings as _get_settings
+        _settings = _get_settings()
+        if _settings.requires_real_provider:
+            raise ProviderConfigError(
+                f"Fake provider is not allowed in {_settings.ENVIRONMENT} environment"
+            )
         return FakeProvider()
 
     elif settings.provider_type == ProviderType.GROQ:
@@ -183,6 +206,9 @@ def create_fallback_provider(settings: Optional[ProviderSettings] = None) -> Opt
 
     Returns:
         Provider instance or None if fallback is disabled or not configured.
+
+    Raises:
+        ProviderConfigError: If fake fallback is used in non-local environment.
     """
     if settings is None:
         settings = load_provider_settings()
@@ -193,6 +219,16 @@ def create_fallback_provider(settings: Optional[ProviderSettings] = None) -> Opt
     # Don't create fallback if it's the same as primary
     if settings.fallback_provider == settings.provider_type:
         return None
+
+    # Defensive check: fake fallback should not be created in non-local environments
+    if settings.fallback_provider == ProviderType.FAKE:
+        from app.core.config import get_settings as _get_settings
+        _settings = _get_settings()
+        if _settings.requires_real_provider:
+            raise ProviderConfigError(
+                f"Fake fallback provider is not allowed in {_settings.ENVIRONMENT} environment"
+            )
+        return FakeProvider()
 
     try:
         if settings.fallback_provider == ProviderType.GROQ:
@@ -216,9 +252,6 @@ def create_fallback_provider(settings: Optional[ProviderSettings] = None) -> Opt
                 tpm_limit=settings.gemini_tpm_limit,
                 rpm_limit=settings.gemini_rpm_limit,
             )
-
-        elif settings.fallback_provider == ProviderType.FAKE:
-            return FakeProvider()
 
     except Exception as e:
         logger.warning(
