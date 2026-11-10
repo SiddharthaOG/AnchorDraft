@@ -118,16 +118,30 @@ def load_provider_settings() -> ProviderSettings:
             f"Use a real fallback provider (groq or gemini) or disable fallback."
         )
 
-    # In non-local environments, require real API keys for configured providers
+    # In non-local environments, require credentials only for providers
+    # that will actually be used.
     if settings.requires_real_provider:
-        if provider_type == ProviderType.GROQ and not getattr(settings, "GROQ_API_KEY", ""):
-            raise ProviderConfigError("GROQ_API_KEY is required for Groq provider in non-local environment")
-        if provider_type == ProviderType.GEMINI and not getattr(settings, "GEMINI_API_KEY", ""):
-            raise ProviderConfigError("GEMINI_API_KEY is required for Gemini provider in non-local environment")
-        if fallback_provider == ProviderType.GROQ and not getattr(settings, "GROQ_API_KEY", ""):
-            raise ProviderConfigError("GROQ_API_KEY is required for Groq fallback in non-local environment")
-        if fallback_provider == ProviderType.GEMINI and not getattr(settings, "GEMINI_API_KEY", ""):
-            raise ProviderConfigError("GEMINI_API_KEY is required for Gemini fallback in non-local environment")
+        if provider_type == ProviderType.GROQ and not getattr(settings, "GROQ_API_KEY", "").strip():
+            raise ProviderConfigError(
+                "GROQ_API_KEY is required for Groq primary provider in non-local environment"
+            )
+
+        if provider_type == ProviderType.GEMINI and not getattr(settings, "GEMINI_API_KEY", "").strip():
+            raise ProviderConfigError(
+                "GEMINI_API_KEY is required for Gemini primary provider in non-local environment"
+            )
+
+        # A disabled fallback must not require credentials.
+        if fallback_enabled:
+            if fallback_provider == ProviderType.GROQ and not getattr(settings, "GROQ_API_KEY", "").strip():
+                raise ProviderConfigError(
+                    "GROQ_API_KEY is required for Groq fallback in non-local environment"
+                )
+
+            if fallback_provider == ProviderType.GEMINI and not getattr(settings, "GEMINI_API_KEY", "").strip():
+                raise ProviderConfigError(
+                    "GEMINI_API_KEY is required for Gemini fallback in non-local environment"
+                )
 
     return ProviderSettings(
         provider_type=provider_type,

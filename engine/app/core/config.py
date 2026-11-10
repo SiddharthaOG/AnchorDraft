@@ -96,12 +96,32 @@ class Settings(BaseSettings):
     @field_validator("ENVIRONMENT", mode="before")
     @classmethod
     def _normalize_environment(cls, value: Any) -> str:
-        # Normalize environment value: strip whitespace and lower case
-        if value is None:
-            raise ValueError("ENVIRONMENT must be explicitly set (e.g., development, staging, production)")
-        if isinstance(value, str):
-            return value.strip().lower()
-        return str(value).strip().lower()
+        """Normalize and validate the deployment environment."""
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                "ENVIRONMENT must be explicitly set to one of: "
+                "development, dev, local, test, staging, production, prod"
+            )
+
+        normalized = value.strip().lower()
+
+        allowed_environments = {
+            "development",
+            "dev",
+            "local",
+            "test",
+            "staging",
+            "production",
+            "prod",
+        }
+
+        if normalized not in allowed_environments:
+            raise ValueError(
+                f"Unsupported ENVIRONMENT '{normalized}'. "
+                f"Allowed values: {', '.join(sorted(allowed_environments))}"
+            )
+
+        return normalized
 
     @property
     def ALLOWED_ORIGINS_LIST(self) -> list[str]:

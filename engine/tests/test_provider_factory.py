@@ -783,6 +783,101 @@ class TestLoadSettingsEnvironmentBehavior:
             assert settings.fallback_provider == ProviderType.FAKE
             assert settings.fallback_enabled is False
 
+    def test_production_fallback_disabled_no_fallback_credentials_required(self):
+        """Production with disabled fallback does not require fallback credentials."""
+        with patch('app.llm.provider_factory.get_settings') as mock_get_settings:
+            mock_settings = self._make_mock_settings(
+                LLM_PROVIDER="groq",
+                GROQ_API_KEY="test-groq-key",
+                LLM_FALLBACK_PROVIDER="gemini",
+                GEMINI_API_KEY="",
+                LLM_FALLBACK_ENABLED=False,
+                ENVIRONMENT="production",
+            )
+            mock_get_settings.return_value = mock_settings
+
+            settings = load_provider_settings()
+
+            assert settings.provider_type == ProviderType.GROQ
+            assert settings.fallback_provider == ProviderType.GEMINI
+            assert settings.fallback_enabled is False
+
+    def test_production_fallback_enabled_requires_fallback_credentials(self):
+        """Production with enabled fallback requires fallback credentials."""
+        with patch('app.llm.provider_factory.get_settings') as mock_get_settings:
+            mock_settings = self._make_mock_settings(
+                LLM_PROVIDER="groq",
+                GROQ_API_KEY="test-groq-key",
+                LLM_FALLBACK_PROVIDER="gemini",
+                GEMINI_API_KEY="",
+                LLM_FALLBACK_ENABLED=True,
+                ENVIRONMENT="production",
+            )
+            mock_get_settings.return_value = mock_settings
+
+            with pytest.raises(ProviderConfigError, match="GEMINI_API_KEY is required"):
+                load_provider_settings()
+
+    def test_production_fallback_disabled_fake_fallback_allowed(self):
+        """Production with disabled fallback allows fake fallback config (not used)."""
+        with patch('app.llm.provider_factory.get_settings') as mock_get_settings:
+            mock_settings = self._make_mock_settings(
+                LLM_PROVIDER="groq",
+                GROQ_API_KEY="test-key",
+                LLM_FALLBACK_PROVIDER="fake",
+                LLM_FALLBACK_ENABLED=False,
+                ENVIRONMENT="production",
+            )
+            mock_get_settings.return_value = mock_settings
+
+            settings = load_provider_settings()
+
+            assert settings.provider_type == ProviderType.GROQ
+            assert settings.fallback_provider == ProviderType.FAKE
+            assert settings.fallback_enabled is False
+
+    def test_fallback_disabled_returns_none(self):
+        """When fallback is disabled, create_fallback_provider returns None."""
+        with patch('app.llm.provider_factory.get_settings') as mock_get_settings:
+            mock_settings = self._make_mock_settings(
+                LLM_PROVIDER="groq",
+                GROQ_API_KEY="test-key",
+                LLM_FALLBACK_PROVIDER="gemini",
+                GEMINI_API_KEY="",
+                LLM_FALLBACK_ENABLED=False,
+                ENVIRONMENT="production",
+            )
+            mock_get_settings.return_value = mock_settings
+
+            settings = load_provider_settings()
+            fallback = create_fallback_provider(settings)
+            assert fallback is None
+
+    @pytest.mark.asyncio
+    async def test_production_fallback_disabled_primary_works(self):
+        """Production with disabled fallback creates primary provider successfully."""
+        with patch('app.llm.provider_factory.get_settings') as mock_get_settings:
+            mock_settings = self._make_mock_settings(
+                LLM_PROVIDER="groq",
+                GROQ_API_KEY="test-groq-key",
+                LLM_FALLBACK_PROVIDER="gemini",
+                GEMINI_API_KEY="",
+                LLM_FALLBACK_ENABLED=False,
+                ENVIRONMENT="production",
+            )
+            mock_get_settings.return_value = mock_settings
+
+            settings = load_provider_settings()
+            primary = create_provider(settings)
+
+            assert primary is not None
+            from app.llm.groq_provider import GroqProvider
+            assert isinstance(primary, GroqProvider)
+
+            # Fallback should be None
+            fallback = create_fallback_provider(settings)
+            assert fallback is None
+
 
 # ============================================================================
 # Token Budget Rejection Tests
