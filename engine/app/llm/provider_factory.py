@@ -63,6 +63,9 @@ def load_provider_settings() -> ProviderSettings:
 
     Returns:
         ProviderSettings with all configuration values.
+
+    Raises:
+        ProviderConfigError: If provider configuration is invalid for production.
     """
     settings = get_settings()
 
@@ -71,6 +74,12 @@ def load_provider_settings() -> ProviderSettings:
     try:
         provider_type = ProviderType(provider_str)
     except ValueError:
+        # In production, fail closed on unknown provider
+        env = getattr(settings, "ENVIRONMENT", "development").lower()
+        if env in ("production", "prod"):
+            raise ProviderConfigError(
+                f"Unknown provider type: '{provider_str}'. Valid options: {[p.value for p in ProviderType]}"
+            )
         logger.warning(
             "unknown_provider_type",
             extra={"provider": provider_str, "defaulting_to": "fake"},
@@ -82,11 +91,28 @@ def load_provider_settings() -> ProviderSettings:
     try:
         fallback_provider = ProviderType(fallback_str)
     except ValueError:
+        env = getattr(settings, "ENVIRONMENT", "development").lower()
+        if env in ("production", "prod"):
+            raise ProviderConfigError(
+                f"Unknown fallback provider: '{fallback_str}'. Valid options: {[p.value for p in ProviderType]}"
+            )
         logger.warning(
             "unknown_fallback_provider",
             extra={"provider": fallback_str, "defaulting_to": "gemini"},
         )
         fallback_provider = ProviderType.GEMINI
+
+    # In production, require real API keys for non-fake providers
+    env = getattr(settings, "ENVIRONMENT", "development").lower()
+    if env in ("production", "prod"):
+        if provider_type == ProviderType.GROQ and not getattr(settings, "GROQ_API_KEY", ""):
+            raise ProviderConfigError("GROQ_API_KEY is required for Groq provider in production")
+        if provider_type == ProviderType.GEMINI and not getattr(settings, "GEMINI_API_KEY", ""):
+            raise ProviderConfigError("GEMINI_API_KEY is required for Gemini provider in production")
+        if fallback_provider == ProviderType.GROQ and not getattr(settings, "GROQ_API_KEY", ""):
+            raise ProviderConfigError("GROQ_API_KEY is required for Groq fallback in production")
+        if fallback_provider == ProviderType.GEMINI and not getattr(settings, "GEMINI_API_KEY", ""):
+            raise ProviderConfigError("GEMINI_API_KEY is required for Gemini fallback in production")
 
     return ProviderSettings(
         provider_type=provider_type,

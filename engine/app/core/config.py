@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     LLM_FALLBACK_PROVIDER: str = "gemini"
     LLM_FALLBACK_ENABLED: bool = True
 
+    # Environment (development, staging, production)
+    ENVIRONMENT: str = "development"
+
     # Groq settings
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "openai/gpt-oss-120b"
