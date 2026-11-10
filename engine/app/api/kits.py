@@ -128,140 +128,89 @@ async def lint_kit(
         config = rule.get("config") or {}
         check_type = config.get("check")
         if check_type == "term_map":
-            entries = config.get("entries", [])
-            if len(entries) > 100:
-                issues.append({
-                    "severity": "error",
-                    "code": "TOO_MANY_TERM_MAP_ENTRIES",
-                    "ref_key": rule.get("rule_key"),
-                    "message": f"Term map rule {rule.get('rule_key')} exceeds 100 entries (has {len(entries)})",
-                })
-            for entry in entries:
-                avoid_terms = entry.get("avoid", [])
-                if len(avoid_terms) > 100:
+            entries = config.get("entries")
+            if isinstance(entries, list):
+                if len(entries) > 100:
                     issues.append({
                         "severity": "error",
-                        "code": "TOO_MANY_AVOID_TERMS",
+                        "code": "TOO_MANY_TERM_MAP_ENTRIES",
                         "ref_key": rule.get("rule_key"),
-                        "message": f"Term map entry exceeds 100 avoid terms (has {len(avoid_terms)})",
+                        "message": f"Term map rule {rule.get('rule_key')} exceeds 100 entries (has {len(entries)})",
                     })
-                for term in avoid_terms:
-                    if len(term) > 100:
+                for entry in entries:
+                    if isinstance(entry, dict):
+                        avoid_terms = entry.get("avoid")
+                        if isinstance(avoid_terms, list):
+                            if len(avoid_terms) > 100:
+                                issues.append({
+                                    "severity": "error",
+                                    "code": "TOO_MANY_AVOID_TERMS",
+                                    "ref_key": rule.get("rule_key"),
+                                    "message": f"Term map entry exceeds 100 avoid terms (has {len(avoid_terms)})",
+                                })
+                            for term in avoid_terms:
+                                if isinstance(term, str) and len(term) > 100:
+                                    issues.append({
+                                        "severity": "error",
+                                        "code": "TERM_TOO_LONG",
+                                        "ref_key": rule.get("rule_key"),
+                                        "message": f"Term map avoid term exceeds 100 characters: '{term[:50]}...'",
+                                    })
+                        prefer = entry.get("prefer")
+                        if isinstance(prefer, str) and len(prefer) > 100:
+                            issues.append({
+                                "severity": "error",
+                                "code": "TERM_TOO_LONG",
+                                "ref_key": rule.get("rule_key"),
+                                "message": f"Term map prefer term exceeds 100 characters: '{prefer[:50]}...'",
+                            })
+        elif check_type == "phrase_list":
+            phrases = config.get("phrases")
+            if isinstance(phrases, list):
+                if len(phrases) > 100:
+                    issues.append({
+                        "severity": "error",
+                        "code": "TOO_MANY_PHRASES",
+                        "ref_key": rule.get("rule_key"),
+                        "message": f"Phrase list rule {rule.get('rule_key')} exceeds 100 phrases (has {len(phrases)})",
+                    })
+                for phrase in phrases:
+                    if isinstance(phrase, str) and len(phrase) > 100:
                         issues.append({
                             "severity": "error",
-                            "code": "TERM_TOO_LONG",
+                            "code": "PHRASE_TOO_LONG",
                             "ref_key": rule.get("rule_key"),
-                            "message": f"Term map avoid term exceeds 100 characters: '{term[:50]}...'",
+                            "message": f"Phrase exceeds 100 characters: '{phrase[:50]}...'",
                         })
-                prefer = entry.get("prefer", "")
-                if len(prefer) > 100:
-                    issues.append({
-                        "severity": "error",
-                        "code": "TERM_TOO_LONG",
-                        "ref_key": rule.get("rule_key"),
-                        "message": f"Term map prefer term exceeds 100 characters: '{prefer[:50]}...'",
-                    })
-        elif check_type == "phrase_list":
-            phrases = config.get("phrases", [])
-            if len(phrases) > 100:
-                issues.append({
-                    "severity": "error",
-                    "code": "TOO_MANY_PHRASES",
-                    "ref_key": rule.get("rule_key"),
-                    "message": f"Phrase list rule {rule.get('rule_key')} exceeds 100 phrases (has {len(phrases)})",
-                })
-            for phrase in phrases:
-                if len(phrase) > 100:
-                    issues.append({
-                        "severity": "error",
-                        "code": "PHRASE_TOO_LONG",
-                        "ref_key": rule.get("rule_key"),
-                        "message": f"Phrase exceeds 100 characters: '{phrase[:50]}...'",
-                    })
         elif check_type == "missing_alt_text":
-            config_keys = set(config.keys())
-            required_keys = {"min_length", "generic"}
-            missing_keys = required_keys - config_keys
-            if missing_keys:
-                issues.append({
-                    "severity": "error",
-                    "code": "INVALID_CONFIG",
-                    "ref_key": rule.get("rule_key"),
-                    "message": f"Missing alt text rule {rule.get('rule_key')} missing required config keys: {missing_keys}",
-                })
-            min_length = config.get("min_length", 5)
-            if not isinstance(min_length, int) or min_length < 1:
-                issues.append({
-                    "severity": "error",
-                    "code": "INVALID_CONFIG",
-                    "ref_key": rule.get("rule_key"),
-                    "message": f"Missing alt text rule {rule.get('rule_key')} min_length must be a positive integer",
-                })
-            generic = config.get("generic", [])
-            if not isinstance(generic, list) or not all(isinstance(t, str) and t for t in generic):
-                issues.append({
-                    "severity": "error",
-                    "code": "INVALID_CONFIG",
-                    "ref_key": rule.get("rule_key"),
-                    "message": f"Missing alt text rule {rule.get('rule_key')} generic must be a list of non-empty strings",
-                })
-            if len(generic) > 100:
-                issues.append({
-                    "severity": "error",
-                    "code": "TOO_MANY_GENERIC_TERMS",
-                    "ref_key": rule.get("rule_key"),
-                    "message": f"Missing alt text rule {rule.get('rule_key')} exceeds 100 generic terms (has {len(generic)})",
-                })
+            generic = config.get("generic")
+            if isinstance(generic, list):
+                if len(generic) > 100:
+                    issues.append({
+                        "severity": "error",
+                        "code": "TOO_MANY_GENERIC_TERMS",
+                        "ref_key": rule.get("rule_key"),
+                        "message": f"Missing alt text rule {rule.get('rule_key')} exceeds 100 generic terms (has {len(generic)})",
+                    })
         elif check_type == "required_disclosure":
-            config_keys = set(config.keys())
-            required_keys = {"when_any", "require_any"}
-            missing_keys = required_keys - config_keys
-            if missing_keys:
-                issues.append({
-                    "severity": "error",
-                    "code": "INVALID_CONFIG",
-                    "ref_key": rule.get("rule_key"),
-                    "message": f"Required disclosure rule {rule.get('rule_key')} missing required config keys: {missing_keys}",
-                })
-            when_any = config.get("when_any", [])
-            if not isinstance(when_any, list) or not all(isinstance(t, str) and t for t in when_any):
-                issues.append({
-                    "severity": "error",
-                    "code": "INVALID_CONFIG",
-                    "ref_key": rule.get("rule_key"),
-                    "message": f"Required disclosure rule {rule.get('rule_key')} when_any must be a list of non-empty strings",
-                })
-            if len(when_any) > 100:
-                issues.append({
-                    "severity": "error",
-                    "code": "TOO_MANY_WHEN_ANY_TERMS",
-                    "ref_key": rule.get("rule_key"),
-                    "message": f"Required disclosure rule {rule.get('rule_key')} exceeds 100 when_any terms (has {len(when_any)})",
-                })
-            require_any = config.get("require_any", [])
-            if not isinstance(require_any, list) or not all(isinstance(t, str) and t for t in require_any):
-                issues.append({
-                    "severity": "error",
-                    "code": "INVALID_CONFIG",
-                    "ref_key": rule.get("rule_key"),
-                    "message": f"Required disclosure rule {rule.get('rule_key')} require_any must be a list of non-empty strings",
-                })
-            if len(require_any) > 100:
-                issues.append({
-                    "severity": "error",
-                    "code": "TOO_MANY_REQUIRE_ANY_TERMS",
-                    "ref_key": rule.get("rule_key"),
-                    "message": f"Required disclosure rule {rule.get('rule_key')} exceeds 100 require_any terms (has {len(require_any)})",
-                })
-
-        # Check: rule has guideline text
-        if not rule.get("guideline_text"):
-            issues.append({
-                "severity": "error",
-                "code": "EMPTY_GUIDELINE",
-                "ref_key": rule.get("rule_key"),
-                "message": f"Rule {rule.get('rule_key')} has empty guideline text",
-            })
+            when_any = config.get("when_any")
+            if isinstance(when_any, list):
+                if len(when_any) > 100:
+                    issues.append({
+                        "severity": "error",
+                        "code": "TOO_MANY_WHEN_ANY_TERMS",
+                        "ref_key": rule.get("rule_key"),
+                        "message": f"Required disclosure rule {rule.get('rule_key')} exceeds 100 when_any terms (has {len(when_any)})",
+                    })
+            require_any = config.get("require_any")
+            if isinstance(require_any, list):
+                if len(require_any) > 100:
+                    issues.append({
+                        "severity": "error",
+                        "code": "TOO_MANY_REQUIRE_ANY_TERMS",
+                        "ref_key": rule.get("rule_key"),
+                        "message": f"Required disclosure rule {rule.get('rule_key')} exceeds 100 require_any terms (has {len(require_any)})",
+                    })
 
     # Calculate prompt size estimate
     total_chars = sum(
