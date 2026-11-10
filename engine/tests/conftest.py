@@ -6,6 +6,16 @@ from contextlib import asynccontextmanager
 from httpx import ASGITransport, AsyncClient
 
 
+@pytest.fixture(autouse=True)
+def test_environment(monkeypatch):
+    """Set test environment for all tests."""
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    from app.core.config import clear_settings_cache
+    clear_settings_cache()
+    yield
+    clear_settings_cache()
+
+
 class AsyncContextManagerMock:
     """A mock that properly implements the async context manager protocol."""
 
