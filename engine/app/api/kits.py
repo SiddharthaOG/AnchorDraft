@@ -55,47 +55,70 @@ async def lint_kit(
             "message": "Kit must have at least one rule",
         })
 
-    # Check: rules have valid config
+    # Check: rules have valid config and guideline text.
     for rule in rules:
-        if rule["check_kind"] == "deterministic":
-            config = rule.get("config") or {}
-            check_type = config.get("check")
-            if check_type not in check_map:
+        if not isinstance(rule, dict):
+            issues.append({
+                "severity": "error",
+                "code": "INVALID_RULE",
+                "ref_key": None,
+                "message": "Rule must be a dictionary",
+            })
+            continue
+
+        if rule.get("check_kind") == "deterministic":
+            raw_config = rule.get("config")
+
+            if not isinstance(raw_config, dict):
                 issues.append({
                     "severity": "error",
-                    "code": "UNKNOWN_CHECK_TYPE",
+                    "code": "INVALID_CONFIG",
                     "ref_key": rule.get("rule_key"),
-                    "message": f"Unknown deterministic check type: '{check_type}'",
+                    "message": "Deterministic rule config must be a dictionary",
                 })
             else:
-                # Validate config using the check's validate_config method
-                try:
-                    checker = check_map[check_type](RuleConfig(
-                        check=check_type,
-                        config=config,
-                        rule_key=rule["rule_key"],
-                        category=rule["category"],
-                        severity=rule["severity"],
-                        guideline_text=rule.get("guideline_text", ""),
-                        needs_reviewer=rule.get("needs_reviewer", False),
-                    ))
-                    checker.validate_config()
-                except ValueError as e:
-                    issues.append({
-                        "severity": "error",
-                        "code": "INVALID_CONFIG",
-                        "ref_key": rule.get("rule_key"),
-                        "message": f"Deterministic rule {rule.get('rule_key')} has invalid config: {e}",
-                    })
-                except Exception as e:
-                    issues.append({
-                        "severity": "error",
-                        "code": "INVALID_CONFIG",
-                        "ref_key": rule.get("rule_key"),
-                        "message": f"Deterministic rule {rule.get('rule_key')} has invalid config: {type(e).__name__}",
-                    })
+                check_type = raw_config.get("check")
 
-        # Check: rule has guideline text
+                if not isinstance(check_type, str) or check_type not in check_map:
+                    issues.append({
+                        "severity": "error",
+                        "code": "UNKNOWN_CHECK_TYPE",
+                        "ref_key": rule.get("rule_key"),
+                        "message": f"Unknown deterministic check type: {check_type!r}",
+                    })
+                else:
+                    try:
+                        checker = check_map[check_type](RuleConfig(
+                            check=check_type,
+                            config=raw_config,
+                            rule_key=rule["rule_key"],
+                            category=rule["category"],
+                            severity=rule["severity"],
+                            guideline_text=rule.get("guideline_text", ""),
+                            needs_reviewer=rule.get("needs_reviewer", False),
+                        ))
+                        checker.validate_config()
+                    except ValueError as e:
+                        issues.append({
+                            "severity": "error",
+                            "code": "INVALID_CONFIG",
+                            "ref_key": rule.get("rule_key"),
+                            "message": (
+                                f"Deterministic rule {rule.get('rule_key')} "
+                                f"has invalid config: {e}"
+                            ),
+                        })
+                    except Exception as e:
+                        issues.append({
+                            "severity": "error",
+                            "code": "INVALID_CONFIG",
+                            "ref_key": rule.get("rule_key"),
+                            "message": (
+                                f"Deterministic rule {rule.get('rule_key')} "
+                                f"has invalid config: {type(e).__name__}"
+                            ),
+                        })
+
         if not rule.get("guideline_text"):
             issues.append({
                 "severity": "error",
@@ -125,8 +148,16 @@ async def lint_kit(
         })
 
     for rule in deterministic_rules_list:
-        config = rule.get("config") or {}
+        if not isinstance(rule, dict):
+            continue
+
+        config = rule.get("config")
+        if not isinstance(config, dict):
+            continue
+
         check_type = config.get("check")
+        if not isinstance(check_type, str):
+            continue
         if check_type == "term_map":
             entries = config.get("entries")
             if isinstance(entries, list):
