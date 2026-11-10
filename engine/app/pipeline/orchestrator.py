@@ -543,14 +543,13 @@ class ReviewOrchestrator:
 
             llm_status = "ok"
             model = None
-            prompt_version = None
+            prompt_version = "p1"
             llm_findings_raw = 0
-            llm_findings_dropped = 0
             model_candidates = []
             model_warnings = []
 
             try:
-                model_candidates, _, model, prompt_version, input_tokens, output_tokens, model_warnings = \
+                model_candidates, _, model, _, input_tokens, output_tokens, model_warnings = \
                     await self._run_model_analysis(
                         pipeline_input.revision_text,
                         rules,
@@ -585,11 +584,12 @@ class ReviewOrchestrator:
                 rules,
                 facts,
                 model_offered_rules=set([r.rule_key for r in rules if r.check_kind == "llm"]),
-                model_offered_facts=set(),
+                model_offered_facts=model_offered_facts,
             )
 
             # 8. Prepare validator stats
             total_dropped = sum(validation_result.dropped_counts.values())
+            llm_findings_dropped = total_dropped
             validator_stats = {
                 "raw": validation_result.raw_candidate_count,
                 "kept": validation_result.kept_count,
