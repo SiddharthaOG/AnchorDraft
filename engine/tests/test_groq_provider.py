@@ -501,7 +501,7 @@ class TestGroqErrorMapping:
     @pytest.mark.asyncio
     async def test_auth_error_not_retried(self):
         """Test that authentication errors are not retried and raise ProviderError."""
-        from engine.app.models.pipeline import ProviderError
+        from app.models.pipeline import ProviderError
         provider = GroqProvider(api_key="test-key")
         request = make_request()
 

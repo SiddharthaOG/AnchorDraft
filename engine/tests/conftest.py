@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock
 from typing import Any, AsyncIterator, Optional
 from contextlib import asynccontextmanager
+from httpx import ASGITransport, AsyncClient
 
 
 class AsyncContextManagerMock:
@@ -109,3 +110,36 @@ def mock_pool(mock_conn):
         __aexit__=AsyncMock(return_value=False)
     ))
     return pool
+
+
+@pytest.fixture
+def app():
+    """Create a FastAPI application instance for testing."""
+    from app.main import create_app
+    return create_app()
+
+
+@pytest.fixture
+async def client(app):
+    """Create an async test client for the FastAPI application."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def app_comma_separated(monkeypatch):
+    """Create a FastAPI application with comma-separated ALLOWED_ORIGINS."""
+    from app.main import create_app
+    from app.core.config import clear_settings_cache
+    monkeypatch.setenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000")
+    clear_settings_cache()
+    return create_app()
+
+
+@pytest.fixture
+async def client_comma_separated(app_comma_separated):
+    """Create an async test client for the comma-separated CORS app."""
+    transport = ASGITransport(app=app_comma_separated)
+    async with AsyncClient(transport=transport, base_url="http://test") as test_client:
+        yield test_client

@@ -92,9 +92,9 @@ class TestCORS:
                response.headers.get("access-control-allow-origin") != "http://evil.com"
 
     @pytest.mark.asyncio
-    async def test_cors_preflight_allowed_origin_with_x_request_id(self, client):
+    async def test_cors_preflight_allowed_origin_with_x_request_id(self, client_comma_separated):
         """CORS preflight with allowed origin and X-Request-Id header is accepted."""
-        response = await client.options(
+        response = await client_comma_separated.options(
             "/v1/health",
             headers={
                 "Origin": "http://localhost:5173",
