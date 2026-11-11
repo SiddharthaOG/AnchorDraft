@@ -9,10 +9,11 @@ const createMockChain = () => {
   const order = vi.fn().mockReturnThis();
   const limit = vi.fn().mockReturnThis();
   const single = vi.fn().mockResolvedValue({ data: null, error: null });
+  const maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
   const insert = vi.fn().mockReturnThis();
   const update = vi.fn().mockReturnThis();
   const del = vi.fn().mockReturnThis();
-  return { select, eq, order, limit, single, insert, update, delete: del };
+  return { select, eq, order, limit, single, maybeSingle, insert, update, delete: del };
 };
 
 // Mock the Supabase client module using vi.mock with factory
@@ -131,6 +132,20 @@ describe('Data Access Layer', () => {
       mockFrom.mockReturnValueOnce(mockChain);
 
       await expect(getLatestRevision('content-empty')).resolves.toBeNull();
+    });
+  });
+
+  describe('Review lookup queries', () => {
+    it('uses maybeSingle for revisions that do not have a review yet', async () => {
+      const mockChain = createMockChain();
+      mockChain.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+      mockFrom.mockReturnValueOnce(mockChain);
+
+      await expect(getLatestReviewForRevision('revision-1')).resolves.toBeNull();
+      expect(mockFrom).toHaveBeenCalledWith('reviews');
+      expect(mockChain.eq).toHaveBeenCalledWith('revision_id', 'revision-1');
+      expect(mockChain.maybeSingle).toHaveBeenCalledOnce();
+      expect(mockChain.single).not.toHaveBeenCalled();
     });
   });
 

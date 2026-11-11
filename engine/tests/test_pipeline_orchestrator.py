@@ -303,6 +303,36 @@ class TestSupabaseDataLoader:
         assert rules[1].needs_reviewer is False
         assert all(isinstance(r, RuleData) for r in rules)
 
+    def test_load_rules_and_facts_parses_database_date_strings(self):
+        """Supabase returns DATE columns as ISO strings; normalize at the boundary."""
+        from datetime import date
+        from app.pipeline.orchestrator import SupabaseDataLoader
+
+        loader = SupabaseDataLoader()
+        mock_client = MagicMock()
+        loader._client = mock_client
+        mock_client.get_kit_rules.return_value = []
+        mock_client.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "A test fact",
+                "source_note": "Test source",
+                "valid_until": "2099-12-31",
+            },
+            {
+                "fact_key": "FACT-02",
+                "statement": "A non-expiring fact",
+                "source_note": "Test source",
+                "valid_until": None,
+            },
+        ]
+
+        _, facts = loader.load_rules_and_facts("test-kit-id")
+
+        assert facts[0].valid_until == date(2099, 12, 31)
+        assert isinstance(facts[0].valid_until, date)
+        assert facts[1].valid_until is None
+
 
 # ============================================================================
 # Validator Integration Tests (needs_reviewer propagation)

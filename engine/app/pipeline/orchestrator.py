@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import date
 import uuid
 from dataclasses import dataclass, replace
 from typing import Optional
@@ -175,7 +176,11 @@ class SupabaseDataLoader:
                 fact_key=f["fact_key"],
                 statement=f["statement"],
                 source_note=f["source_note"],
-                valid_until=f["valid_until"],
+                valid_until=(
+                    date.fromisoformat(f["valid_until"])
+                    if isinstance(f.get("valid_until"), str)
+                    else f.get("valid_until")
+                ),
             ))
 
         return rules, facts

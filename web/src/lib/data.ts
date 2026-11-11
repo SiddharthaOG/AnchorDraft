@@ -306,9 +306,9 @@ export async function getLatestReviewForRevision(revisionId: string): Promise<Re
     .eq('revision_id', revisionId)
     .order('created_at', { ascending: false })
     .limit(1)
-    .single();
+    .maybeSingle();
 
-  if (error && error.code !== 'PGRST116') {
+  if (error) {
     throw new Error(`Failed to fetch review: ${error.message}`);
   }
   return data || null;
