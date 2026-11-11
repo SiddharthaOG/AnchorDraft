@@ -178,6 +178,8 @@ def test_sql_migrations_enforce_required_database_contracts():
     root = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
     asset_sql = (root / "20261113000001_visual_asset_integrity.sql").read_text(encoding="utf-8")
     review_sql = (root / "20261113000002_exact_visual_revision_evidence.sql").read_text(encoding="utf-8")
+    lease_sql = (root / "20261107000001_review_lease.sql").read_text(encoding="utf-8")
+    historical_visual_sql = (root / "20261112000002_update_engine_complete_review_for_visual.sql").read_text(encoding="utf-8")
 
     assert "_actor_user_id uuid" in asset_sql
     assert "on conflict (org_id, checksum) do nothing" in asset_sql.lower()
@@ -203,6 +205,18 @@ def test_sql_migrations_enforce_required_database_contracts():
     assert "jsonb_typeof(_region->_region_key) <> 'number'" in review_sql
     assert "drop function public.engine_fail_review" not in review_sql.lower()
     assert "create or replace function public.engine_fail_review" not in review_sql.lower()
+    assert "create or replace function public.engine_fail_review(" in lease_sql
+    assert "_claim_token uuid" in lease_sql
+    assert "for update" in lease_sql.lower()
+    assert "claim_token_mismatch" in lease_sql
+    assert "set status = 'failed'" in lease_sql
+    assert "claim_token = null" in lease_sql
+    assert "claimed_at = null" in lease_sql
+    assert "grant execute on function public.engine_fail_review(uuid,text,uuid) to service_role" in lease_sql
+    assert "drop function if exists public.engine_fail_review(uuid, text)" in historical_visual_sql
+    assert "create or replace function public.engine_fail_review(" in historical_visual_sql
+    executable_review_sql = review_sql.split("-- engine_fail_review preservation audit:", 1)[0]
+    assert "engine_fail_review" not in executable_review_sql.lower()
 
 
 class _FakeUpload:

@@ -194,6 +194,11 @@ end $$;
 revoke all on function public.engine_complete_review(uuid,public.review_status,public.llm_status,jsonb,int,int,jsonb,text,text,jsonb,uuid) from public, anon, authenticated;
 grant execute on function public.engine_complete_review(uuid,public.review_status,public.llm_status,jsonb,int,int,jsonb,text,text,jsonb,uuid) to service_role;
 
--- engine_fail_review(uuid,text,uuid) remains untouched: the prior review-lease migration
--- already defines row locking, mandatory claim-token validation, failure status and audit.
--- Do not recreate an unfenced two-argument overload.
+-- engine_fail_review preservation audit:
+-- 20261104000009 originally defined the unfenced (uuid,text) overload.
+-- 20261107000001 retired that overload and introduced (uuid,text,uuid), retaining
+-- FOR UPDATE, failed status/error/finished_at, and audit while adding mandatory
+-- claim-token validation and clearing claim_token/claimed_at.
+-- 20261112000002 redundantly retires the legacy overload and recreates that same
+-- three-argument behavior. Current Python callers pass all three arguments.
+-- Leave the current three-argument function and its service_role grant untouched.
