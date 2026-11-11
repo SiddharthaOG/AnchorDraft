@@ -41,6 +41,9 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.ALLOWED_ORIGINS_LIST,
+        # Allow only this project's Vercel Preview deployment hostnames.
+        # Preview deployments use both branch aliases and immutable deployment URLs.
+        allow_origin_regex=r"^https://anchordraft(?:-[a-z0-9-]+)?-siddharthaog\.vercel\.app$",
         allow_credentials=True,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["X-Request-Id", "Authorization", "Content-Type"],

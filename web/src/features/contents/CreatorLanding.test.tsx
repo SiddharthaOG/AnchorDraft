@@ -154,10 +154,10 @@ describe('CreatorLanding', () => {
     render(<CreatorLanding />, { wrapper: TestWrapper });
 
     await waitFor(() => {
-      expect(screen.getByText('Create New Content')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Create New Content/ })).toHaveAttribute('href', '/contents/new');
       expect(screen.getByText('My Content')).toBeInTheDocument();
       expect(screen.getByText('Import Document')).toBeInTheDocument();
-      expect(screen.getAllByText('Coming soon')).toHaveLength(3);
+      expect(screen.getAllByText('Coming soon')).toHaveLength(2);
     });
   });
 

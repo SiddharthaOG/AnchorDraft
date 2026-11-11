@@ -970,6 +970,28 @@ describe('startReview', () => {
     expect(caughtError).toMatchObject({ status: 401 });
   });
 
+  it('preserves FastAPI nested authentication errors on 401', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      json: async () => ({
+        detail: {
+          error: {
+            code: 'unauthenticated',
+            message: 'Invalid token: Signature verification failed',
+          },
+        },
+      }),
+    });
+
+    await expect(startReview('revision-1')).rejects.toMatchObject({
+      name: 'ReviewEngineError',
+      status: 401,
+      message: 'Invalid token: Signature verification failed',
+    });
+  });
+
   it('throws ReviewEngineError on 403', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
