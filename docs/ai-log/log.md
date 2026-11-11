@@ -182,3 +182,33 @@ curl http://localhost:8000/v1/health
 1. Architect reviews and resolves decision status in ARCHITECTURE.md.
 2. Human creates Vercel/Render/Supabase projects and configures env vars.
 3. Proceed to Slice 1 (Schema, auth, roles, RLS) after approval.
+
+
+## 2026-11-12 — Improvement 2 Integration Hardening Follow-up
+
+### Summary
+
+Traced the reported Start Review no-response regression against the deployed staging service. Render request logs showed that the browser had reached `POST /v1/reviews/preview`, which returned HTTP 422. The previous frontend error parser did not understand FastAPI's array-shaped validation details, and the error was only placed in the page-level toast. The UI now renders preview failures directly beside the Start Review control and translates FastAPI validation details into a readable message.
+
+### Changes
+
+- Updated `web/src/lib/data.ts` to extract FastAPI request-validation locations and messages from `detail[]`, preserving a machine-readable `request_validation_error` reason.
+- Updated `ContentDetail` to show preview failures inline in the Review Status panel; the button retains immediate pending feedback and is disabled while the request is in flight.
+- Added frontend tests for FastAPI 422 parsing and inline preview failure visibility.
+- Configured the **staging Render service only** to select Gemini as its primary provider (`LLM_PROVIDER=gemini`, model `gemini-3.8-flash`). Disabled provider fallback because only the Gemini credential was confirmed for this staging configuration; no second provider credential was assumed. No secret values were read or written to the repository.
+
+### Verification
+
+- Engine: `py -3.12 -m pytest tests -q` — **702 passed, 4 skipped, 2 warnings**.
+- Web: `npm test -- --reporter=dot` — **183 passed**.
+- Web: `npm run build` — succeeded; existing Vite dynamic-import warning remains.
+- Provider factory smoke test with a non-secret placeholder credential and staging environment — instantiated `GeminiProvider` with model `gemini-3.8-flash`; this verifies provider selection, not the real API credential.
+- Render staging `/v1/health?deep=1` — `status=ok`, database connected.
+- Render CORS preflight for the current Vercel branch alias — HTTP 200 with the exact allow-origin and required headers.
+- Vercel branch deployment for commit `d6fb3e1` — READY and assigned to the branch alias.
+
+### Not Yet Verified
+
+- The exact cause inside the earlier HTTP 422 response was not retained in Render logs. The frontend now exposes FastAPI's validation details on the next request; an authenticated browser retest is still required to capture and resolve any underlying request-shape issue.
+- No authenticated preview → consent → confirmation → Gemini provider call was executed in this pass. Real provider acceptance, returned findings, and audit rows remain end-to-end checks, not claimed as complete.
+- Visual asset upload → vision analysis → visual findings and UI rendering remain end-to-end checks. Automated visual and confidentiality suites pass, but this does not replace a live workflow test.
