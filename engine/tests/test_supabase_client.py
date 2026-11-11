@@ -549,3 +549,1002 @@ class TestKitLintMalformedInput:
         # RULE-02: INVALID_CONFIG (non-dict config)
         assert "INVALID_GUIDELINE_TEXT" in error_codes
         assert "INVALID_CONFIG" in error_codes
+
+
+class TestKitLintFactsMalformedInput:
+    """Tests for lint endpoint handling of malformed facts."""
+
+    @pytest.fixture
+    def mock_supabase(self):
+        """Create a fully mocked SupabaseClient."""
+        with patch('app.api.kits.get_supabase_client') as mock_get_client:
+            mock_client = MagicMock()
+            mock_get_client.return_value = mock_client
+            yield mock_client
+
+    @pytest.fixture
+    def auth_user(self):
+        """Create a mock authenticated user."""
+        from app.auth.dependencies import AuthUser
+        return AuthUser(
+            user_id="user-123",
+            org_id="org-123",
+            roles=["owner"]
+        )
+
+    @pytest.fixture
+    def kit_id(self):
+        return UUID("11111111-1111-1111-1111-111111111111")
+
+    @pytest.mark.asyncio
+    async def test_lint_non_dict_fact_in_facts(self, mock_supabase, auth_user, kit_id):
+        """Test that non-dict fact in facts list is handled gracefully."""
+        from app.api.kits import lint_kit
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Valid Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "deterministic",
+                "config": {"check": "phrase_list", "phrases": ["bad phrase"]},
+                "needs_reviewer": False,
+            }
+        ]
+        # Non-dict fact in the list
+        mock_supabase.get_kit_facts.return_value = [
+            "not a dict",
+            {
+                "fact_key": "FACT-01",
+                "statement": "Valid fact",
+                "source_note": "Test source",
+                "valid_until": None,
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "INVALID_FACT" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_missing_statement(self, mock_supabase, auth_user, kit_id):
+        """Test that missing statement is handled gracefully."""
+        from app.api.kits import lint_kit
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = []
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "source_note": "Test source",
+                "valid_until": None,
+                # Missing statement
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "EMPTY_FACT_STATEMENT" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_none_statement(self, mock_supabase, auth_user, kit_id):
+        """Test that None statement is handled gracefully."""
+        from app.api.kits import lint_kit
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = []
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": None,
+                "source_note": "Test source",
+                "valid_until": None,
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "INVALID_FACT_STATEMENT" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_empty_statement(self, mock_supabase, auth_user, kit_id):
+        """Test that empty statement is handled gracefully."""
+        from app.api.kits import lint_kit
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = []
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "",
+                "source_note": "Test source",
+                "valid_until": None,
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "EMPTY_FACT_STATEMENT" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_integer_statement(self, mock_supabase, auth_user, kit_id):
+        """Test that integer statement is handled gracefully."""
+        from app.api.kits import lint_kit
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        # Add a valid rule to avoid EMPTY_KIT error
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Valid Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "deterministic",
+                "config": {"check": "phrase_list", "phrases": ["bad phrase"]},
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": 123,
+                "source_note": "Test source",
+                "valid_until": None,
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "INVALID_FACT_STATEMENT" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_missing_source_note(self, mock_supabase, auth_user, kit_id):
+        """Test that missing source_note is handled gracefully."""
+        from app.api.kits import lint_kit
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        # Add a valid rule to avoid EMPTY_KIT error
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Valid Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "deterministic",
+                "config": {"check": "phrase_list", "phrases": ["bad phrase"]},
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "Valid statement",
+                "valid_until": None,
+                # Missing source_note
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "EMPTY_FACT_SOURCE_NOTE" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_none_source_note(self, mock_supabase, auth_user, kit_id):
+        """Test that None source_note is handled gracefully."""
+        from app.api.kits import lint_kit
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = []
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "Valid statement",
+                "source_note": None,
+                "valid_until": None,
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "INVALID_FACT_SOURCE_NOTE" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_valid_fact_with_none_valid_until(self, mock_supabase, auth_user, kit_id):
+        """Test that valid fact with None valid_until is accepted."""
+        from app.api.kits import lint_kit
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        # Add a valid rule to avoid EMPTY_KIT error
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Valid Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "deterministic",
+                "config": {"check": "phrase_list", "phrases": ["bad phrase"]},
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "Valid statement",
+                "source_note": "Test source",
+                "valid_until": None,
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        # Should have no issues for a valid fact
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert len(error_codes) == 0
+
+    @pytest.mark.asyncio
+    async def test_lint_missing_valid_until(self, mock_supabase, auth_user, kit_id):
+        """Test that missing valid_until is accepted (optional field)."""
+        from app.api.kits import lint_kit
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        # Add a valid rule to avoid EMPTY_KIT error
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Valid Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "deterministic",
+                "config": {"check": "phrase_list", "phrases": ["bad phrase"]},
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "Valid statement",
+                "source_note": "Test source",
+                # valid_until missing
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert len(error_codes) == 0
+
+    @pytest.mark.asyncio
+    async def test_lint_invalid_valid_until_format(self, mock_supabase, auth_user, kit_id):
+        """Test that invalid valid_until format is handled gracefully."""
+        from app.api.kits import lint_kit
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = []
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "Valid statement",
+                "source_note": "Test source",
+                "valid_until": "not-a-date",
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "INVALID_FACT_VALID_UNTIL" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_invalid_valid_until_type(self, mock_supabase, auth_user, kit_id):
+        """Test that non-string valid_until is handled gracefully."""
+        from app.api.kits import lint_kit
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = []
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "Valid statement",
+                "source_note": "Test source",
+                "valid_until": 12345,  # Integer instead of string
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "INVALID_FACT_VALID_UNTIL" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_expired_fact_warning(self, mock_supabase, auth_user, kit_id):
+        """Test that expired fact produces warning (not error)."""
+        from app.api.kits import lint_kit
+        from datetime import date, timedelta
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = []
+        past_date = (date.today() - timedelta(days=1)).isoformat()
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "Expired fact",
+                "source_note": "Test source",
+                "valid_until": past_date,
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "warnings" in result
+        assert len(result["warnings"]) == 1
+        assert "FACT-01" in result["warnings"][0]
+        assert "past its valid_until" in result["warnings"][0]
+
+    @pytest.mark.asyncio
+    async def test_lint_valid_fact_with_future_valid_until(self, mock_supabase, auth_user, kit_id):
+        """Test that valid fact with future valid_until produces no warning."""
+        from app.api.kits import lint_kit
+        from datetime import date, timedelta
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = []
+        future_date = (date.today() + timedelta(days=30)).isoformat()
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "Valid fact",
+                "source_note": "Test source",
+                "valid_until": future_date,
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "warnings" in result
+        assert len(result["warnings"]) == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.asyncio
+    async def test_lint_malformed_fact_does_not_block_valid_fact(self, mock_supabase, auth_user, kit_id):
+        """Test that malformed fact doesn't prevent valid fact from being processed."""
+        from app.api.kits import lint_kit
+        from datetime import date, timedelta
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = []
+        past_date = (date.today() - timedelta(days=1)).isoformat()
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "",  # Invalid - empty statement
+                "source_note": "Test source",
+                "valid_until": None,
+            },
+            {
+                "fact_key": "FACT-02",
+                "statement": "Valid statement",
+                "source_note": "Test source",
+                "valid_until": past_date,  # Past date - should produce warning
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "EMPTY_FACT_STATEMENT" in error_codes
+# FACT-02 is valid but expired - should produce warning
+        assert "warnings" in result
+        assert len(result["warnings"]) == 1
+        assert "FACT-02" in result["warnings"][0]
+        assert "past its valid_until" in result["warnings"][0]
+
+
+
+"""Tests for lint endpoint handling of malformed rules and check_kind validation, and date format validation."""
+import pytest
+from unittest.mock import MagicMock, patch
+from uuid import UUID
+from datetime import date, timedelta
+from app.api.kits import lint_kit
+from app.auth.dependencies import AuthUser
+
+
+class TestKitLintRulesAndCheckKind:
+    """Tests for lint endpoint handling of malformed rules and check_kind validation, and date format validation."""
+
+    @pytest.fixture
+    def mock_supabase(self):
+        """Create a fully mocked SupabaseClient."""
+        with patch('app.api.kits.get_supabase_client') as mock_get_client:
+            mock_client = MagicMock()
+            mock_get_client.return_value = mock_client
+            yield mock_client
+
+    @pytest.fixture
+    def auth_user(self):
+        """Create a mock authenticated user."""
+        return AuthUser(
+            user_id="user-123",
+            org_id="org-123",
+            roles=["owner"]
+        )
+
+    @pytest.fixture
+    def kit_id(self):
+        return UUID("11111111-1111-1111-1111-111111111111")
+
+    @pytest.mark.asyncio
+    async def test_lint_whitespace_only_guideline_text(self, mock_supabase, auth_user, kit_id):
+        """Test that whitespace-only guideline_text is rejected."""
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Test Rule",
+                "guideline_text": "   ",
+                "check_kind": "llm",
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = []
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "EMPTY_GUIDELINE" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_llm_rule_with_invalid_guideline(self, mock_supabase, auth_user, kit_id):
+        """Test that LLM rule with invalid guideline text is rejected."""
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Test Rule",
+                "guideline_text": "   ",
+                "check_kind": "llm",
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = []
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "EMPTY_GUIDELINE" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_deterministic_rule_invalid_guideline_and_config(self, mock_supabase, auth_user, kit_id):
+        """Test that deterministic rule with both invalid guideline and config reports both errors."""
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Test Rule",
+                "guideline_text": "   ",
+                "check_kind": "deterministic",
+                "config": "not a dict",
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = []
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "EMPTY_GUIDELINE" in error_codes
+        assert "INVALID_CONFIG" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_unknown_check_kind(self, mock_supabase, auth_user, kit_id):
+        """Test that unknown check_kind is rejected."""
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Test Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "invalid_kind",
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = []
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "UNKNOWN_CHECK_KIND" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_non_string_check_kind(self, mock_supabase, auth_user, kit_id):
+        """Test that non-string check_kind is rejected."""
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Test Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": 123,
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = []
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "UNKNOWN_CHECK_KIND" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_llm_rule_with_valid_guideline(self, mock_supabase, auth_user, kit_id):
+        """Test that LLM rule with valid guideline passes."""
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Test Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "llm",
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = []
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "EMPTY_GUIDELINE" not in error_codes
+        assert "INVALID_GUIDELINE_TEXT" not in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_valid_date_format(self, mock_supabase, auth_user, kit_id):
+        """Test that exact YYYY-MM-DD date format is accepted."""
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Valid Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "deterministic",
+                "config": {"check": "phrase_list", "phrases": ["bad phrase"]},
+                "needs_reviewer": False,
+            }
+        ]
+        valid_date = (date.today() + timedelta(days=30)).isoformat()
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "Valid statement",
+                "source_note": "Test source",
+                "valid_until": valid_date,
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert len(error_codes) == 0
+
+    @pytest.mark.asyncio
+    async def test_lint_invalid_date_format(self, mock_supabase, auth_user, kit_id):
+        """Test that non-YYYY-MM-DD date format is rejected."""
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Valid Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "deterministic",
+                "config": {"check": "phrase_list", "phrases": ["bad phrase"]},
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "Valid statement",
+                "source_note": "Test source",
+                "valid_until": "11/11/2026",
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "INVALID_FACT_VALID_UNTIL" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_impossible_date(self, mock_supabase, auth_user, kit_id):
+        """Test that impossible calendar date is rejected."""
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Valid Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "deterministic",
+                "config": {"check": "phrase_list", "phrases": ["bad phrase"]},
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "Valid statement",
+                "source_note": "Test source",
+                "valid_until": "2026-02-30",
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "INVALID_FACT_VALID_UNTIL" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_short_malformed_dates(self, mock_supabase, auth_user, kit_id):
+        """Test that short malformed date strings like '2026' and '2026-11' are rejected."""
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Valid Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "deterministic",
+                "config": {"check": "phrase_list", "phrases": ["bad phrase"]},
+                "needs_reviewer": False,
+            }
+        ]
+
+        for bad_date in ["2026", "2026-11", "2026-1", "26-11-11"]:
+            mock_supabase.get_kit_facts.return_value = [
+                {
+                    "fact_key": "FACT-01",
+                    "statement": "Valid statement",
+                    "source_note": "Test source",
+                    "valid_until": bad_date,
+                }
+            ]
+
+            result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+            assert "ok" in result
+            assert "issues" in result
+            error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+            assert "INVALID_FACT_VALID_UNTIL" in error_codes, f"Failed for date: {bad_date}"
+
+    @pytest.mark.asyncio
+    async def test_lint_whitespace_only_fact_statement(self, mock_supabase, auth_user, kit_id):
+        """Test that whitespace-only fact statement is rejected."""
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Valid Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "deterministic",
+                "config": {"check": "phrase_list", "phrases": ["bad phrase"]},
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "   ",
+                "source_note": "Test source",
+                "valid_until": None,
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "EMPTY_FACT_STATEMENT" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_whitespace_only_fact_source_note(self, mock_supabase, auth_user, kit_id):
+        """Test that whitespace-only fact source_note is rejected."""
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Valid Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "deterministic",
+                "config": {"check": "phrase_list", "phrases": ["bad phrase"]},
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "Valid statement",
+                "source_note": "   ",
+                "valid_until": None,
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "EMPTY_FACT_SOURCE_NOTE" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_whitespace_only_valid_until(self, mock_supabase, auth_user, kit_id):
+        """Test that whitespace-only valid_until is rejected."""
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        mock_supabase.get_kit_rules.return_value = [
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Valid Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "deterministic",
+                "config": {"check": "phrase_list", "phrases": ["bad phrase"]},
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = [
+            {
+                "fact_key": "FACT-01",
+                "statement": "Valid statement",
+                "source_note": "Test source",
+                "valid_until": "   ",
+            }
+        ]
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        assert "INVALID_FACT_VALID_UNTIL" in error_codes

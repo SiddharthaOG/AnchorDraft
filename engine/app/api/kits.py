@@ -1,6 +1,8 @@
 """Kit lint API endpoints."""
 from fastapi import APIRouter, Depends, Path, status, HTTPException
 from uuid import UUID
+from datetime import date
+import re
 
 from app.auth.dependencies import AuthUser, get_current_user_single_org, require_owner
 from app.auth.supabase import get_supabase_client
@@ -55,7 +57,7 @@ async def lint_kit(
             "message": "Kit must have at least one rule",
         })
 
-    # Check: rules have valid config and guideline text.
+    # Validate all rules first (independently of check_kind)
     for rule in rules:
         if not isinstance(rule, dict):
             issues.append({
@@ -66,6 +68,29 @@ async def lint_kit(
             })
             continue
 
+        rule_key = rule.get("rule_key")
+
+        # Validate guideline_text for ALL rule types (LLM and deterministic)
+        guideline_text = rule.get("guideline_text")
+        if not isinstance(guideline_text, str) or not guideline_text.strip():
+            issues.append({
+                "severity": "error",
+                "code": "EMPTY_GUIDELINE" if isinstance(guideline_text, str) and not guideline_text.strip() else "INVALID_GUIDELINE_TEXT",
+                "ref_key": rule_key,
+                "message": f"Rule {rule_key} guideline_text must be a non-empty string",
+            })
+
+        # Validate check_kind against supported values
+        check_kind = rule.get("check_kind")
+        if not isinstance(check_kind, str) or check_kind not in ("deterministic", "llm"):
+            issues.append({
+                "severity": "error",
+                "code": "UNKNOWN_CHECK_KIND",
+                "ref_key": rule_key,
+                "message": f"Rule {rule_key} check_kind must be 'deterministic' or 'llm', got {check_kind!r}",
+            })
+
+        # Only validate deterministic config for deterministic rules
         if rule.get("check_kind") == "deterministic":
             raw_config = rule.get("config")
 
@@ -73,7 +98,7 @@ async def lint_kit(
                 issues.append({
                     "severity": "error",
                     "code": "INVALID_CONFIG",
-                    "ref_key": rule.get("rule_key"),
+                    "ref_key": rule_key,
                     "message": "Deterministic rule config must be a dictionary",
                 })
             else:
@@ -83,59 +108,163 @@ async def lint_kit(
                     issues.append({
                         "severity": "error",
                         "code": "UNKNOWN_CHECK_TYPE",
-                        "ref_key": rule.get("rule_key"),
+                        "ref_key": rule_key,
                         "message": f"Unknown deterministic check type: {check_type!r}",
                     })
                 else:
-                    # Validate guideline_text is a non-empty string
-                    guideline_text = rule.get("guideline_text", "")
-                    if not isinstance(guideline_text, str) or not guideline_text:
+                    try:
+                        checker = check_map[check_type](RuleConfig(
+                            check=check_type,
+                            config=raw_config,
+                            rule_key=rule["rule_key"],
+                            category=rule["category"],
+                            severity=rule["severity"],
+                            guideline_text=rule.get("guideline_text", ""),
+                            needs_reviewer=rule.get("needs_reviewer", False),
+                        ))
+                        checker.validate_config()
+                    except ValueError as e:
                         issues.append({
                             "severity": "error",
-                            "code": "EMPTY_GUIDELINE" if isinstance(guideline_text, str) and not guideline_text else "INVALID_GUIDELINE_TEXT",
-                            "ref_key": rule.get("rule_key"),
-                            "message": f"Rule {rule.get('rule_key')} guideline_text must be a non-empty string",
+                            "code": "INVALID_CONFIG",
+                            "ref_key": rule_key,
+                            "message": (
+                                f"Deterministic rule {rule.get('rule_key')} "
+                                f"has invalid config: {e}"
+                            ),
                         })
-                    else:
-                        try:
-                            checker = check_map[check_type](RuleConfig(
-                                check=check_type,
-                                config=raw_config,
-                                rule_key=rule["rule_key"],
-                                category=rule["category"],
-                                severity=rule["severity"],
-                                guideline_text=guideline_text,
-                                needs_reviewer=rule.get("needs_reviewer", False),
-                            ))
-                            checker.validate_config()
-                        except ValueError as e:
-                            issues.append({
-                                "severity": "error",
-                                "code": "INVALID_CONFIG",
-                                "ref_key": rule.get("rule_key"),
-                                "message": (
-                                    f"Deterministic rule {rule.get('rule_key')} "
-                                    f"has invalid config: {e}"
-                                ),
-                            })
-                        except Exception as e:
-                            issues.append({
-                                "severity": "error",
-                                "code": "INVALID_CONFIG",
-                                "ref_key": rule.get("rule_key"),
-                                "message": (
-                                    f"Deterministic rule {rule.get('rule_key')} "
-                                    f"has invalid config: {type(e).__name__}"
-                                ),
-                            })
+                    except Exception as e:
+                        issues.append({
+                            "severity": "error",
+                            "code": "INVALID_CONFIG",
+                            "ref_key": rule_key,
+                            "message": (
+                                f"Deterministic rule {rule.get('rule_key')} "
+                                f"has invalid config: {type(e).__name__}"
+                            ),
+                        })
 
-    # Check: facts not past valid_until
-    from datetime import date
-    today = date.today()
+
+    # Validate facts
+    validated_facts = []
     for fact in facts:
+        if not isinstance(fact, dict):
+            issues.append({
+                "severity": "error",
+                "code": "INVALID_FACT",
+                "ref_key": None,
+                "message": "Fact must be a dictionary",
+            })
+            continue
+
+        fact_key = fact.get("fact_key")
+        fact_has_errors = False
+
+        # Validate statement (required, non-empty string, no whitespace-only)
+        if "statement" not in fact:
+            issues.append({
+                "severity": "error",
+                "code": "EMPTY_FACT_STATEMENT",
+                "ref_key": fact_key,
+                "message": f"Fact {fact_key} statement must be a non-empty string",
+            })
+            fact_has_errors = True
+        else:
+            statement = fact.get("statement")
+            if not isinstance(statement, str) or not statement.strip():
+                issues.append({
+                    "severity": "error",
+                    "code": "EMPTY_FACT_STATEMENT" if isinstance(statement, str) and not statement.strip() else "INVALID_FACT_STATEMENT",
+                    "ref_key": fact_key,
+                    "message": f"Fact {fact_key} statement must be a non-empty string",
+                })
+                fact_has_errors = True
+
+        # Validate source_note (required string, no whitespace-only)
+        if "source_note" not in fact:
+            issues.append({
+                "severity": "error",
+                "code": "EMPTY_FACT_SOURCE_NOTE",
+                "ref_key": fact_key,
+                "message": f"Fact {fact_key} source_note must be a non-empty string",
+            })
+            fact_has_errors = True
+        else:
+            source_note = fact.get("source_note")
+            if not isinstance(source_note, str) or not source_note.strip():
+                issues.append({
+                    "severity": "error",
+                    "code": "EMPTY_FACT_SOURCE_NOTE" if isinstance(source_note, str) and not source_note.strip() else "INVALID_FACT_SOURCE_NOTE",
+                    "ref_key": fact_key,
+                    "message": f"Fact {fact_key} source_note must be a non-empty string",
+                })
+                fact_has_errors = True
+
+        # Validate valid_until (optional, must be exact YYYY-MM-DD format if present)
         valid_until = fact.get("valid_until")
-        if valid_until and valid_until < today.isoformat():
-            warnings.append(f"Fact {fact.get('fact_key')} is past its valid_until date")
+        if valid_until is not None:
+            if not isinstance(valid_until, str):
+                issues.append({
+                    "severity": "error",
+                    "code": "INVALID_FACT_VALID_UNTIL",
+                    "ref_key": fact_key,
+                    "message": f"Fact {fact_key} valid_until must be a string in YYYY-MM-DD format",
+                })
+                fact_has_errors = True
+            elif not valid_until.strip():
+                issues.append({
+                    "severity": "error",
+                    "code": "INVALID_FACT_VALID_UNTIL",
+                    "ref_key": fact_key,
+                    "message": f"Fact {fact_key} valid_until must be a non-empty string in YYYY-MM-DD format",
+                })
+                fact_has_errors = True
+            elif not valid_until.strip() == valid_until:
+                issues.append({
+                    "severity": "error",
+                    "code": "INVALID_FACT_VALID_UNTIL",
+                    "ref_key": fact_key,
+                    "message": f"Fact {fact_key} valid_until must not have leading/trailing whitespace",
+                })
+                fact_has_errors = True
+            elif len(valid_until) != 10 or not valid_until[:4].isdigit() or valid_until[4] != '-' or not valid_until[5:7].isdigit() or valid_until[7] != '-' or not valid_until[8:].isdigit():
+                issues.append({
+                    "severity": "error",
+                    "code": "INVALID_FACT_VALID_UNTIL",
+                    "ref_key": fact_key,
+                    "message": f"Fact {fact_key} valid_until must be in YYYY-MM-DD format",
+                })
+                fact_has_errors = True
+            else:
+                try:
+                    date.fromisoformat(valid_until)
+                except ValueError:
+                    issues.append({
+                        "severity": "error",
+                        "code": "INVALID_FACT_VALID_UNTIL",
+                        "ref_key": fact_key,
+                        "message": f"Fact {fact_key} valid_until must be a valid calendar date in YYYY-MM-DD format",
+                    })
+                    fact_has_errors = True
+
+        # Add valid fact to validated collection only if no errors
+        if not fact_has_errors:
+            validated_facts.append(fact)
+
+    # Check: facts not past valid_until (only for valid facts with valid_until)
+    today = date.today()
+    for fact in validated_facts:
+        if not isinstance(fact, dict):
+            continue
+        valid_until = fact.get("valid_until")
+        if valid_until:
+            try:
+                valid_date = date.fromisoformat(valid_until)
+                if valid_date < today:
+                    warnings.append(f"Fact {fact.get('fact_key')} is past its valid_until date")
+            except ValueError:
+                # Invalid date format already caught above
+                pass
 
     # Enforce documented limits (from REVIEW_ENGINE.md)
     # Limit: at most 100 phrases per rule, each at most 100 characters
