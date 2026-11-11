@@ -24,6 +24,10 @@ create index idx_visual_assets_uploaded_by on public.visual_assets (uploaded_by)
 -- 2. Extend findings with visual evidence fields
 alter table public.findings add column if not exists asset_id uuid null references public.visual_assets(id) on delete set null;
 alter table public.findings add column if not exists region jsonb null;  -- {"x": 0, "y": 0, "w": 100, "h": 100} normalized 0-1
+-- Visual evidence uses asset_id + region instead of text quote/offset evidence.
+alter table public.findings alter column quote drop not null;
+alter table public.findings alter column start_offset drop not null;
+alter table public.findings alter column end_offset drop not null;
 
 create index idx_findings_asset_id on public.findings (asset_id);
 

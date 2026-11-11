@@ -176,12 +176,16 @@ async def test_revision_rpc_failure_propagates():
 
 def test_sql_migrations_enforce_required_database_contracts():
     root = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
+    base_visual_sql = (root / "20261111000001_visual_assets.sql").read_text(encoding="utf-8")
     asset_sql = (root / "20261113000001_visual_asset_integrity.sql").read_text(encoding="utf-8")
     link_sql = (root / "20261112000001_visual_asset_content_link.sql").read_text(encoding="utf-8")
     review_sql = (root / "20261113000002_exact_visual_revision_evidence.sql").read_text(encoding="utf-8")
     lease_sql = (root / "20261107000001_review_lease.sql").read_text(encoding="utf-8")
     historical_visual_sql = (root / "20261112000002_update_engine_complete_review_for_visual.sql").read_text(encoding="utf-8")
 
+    assert "alter column quote drop not null" in base_visual_sql.lower()
+    assert "alter column start_offset drop not null" in base_visual_sql.lower()
+    assert "alter column end_offset drop not null" in base_visual_sql.lower()
     assert "_actor_user_id uuid" in asset_sql
     assert "_checksum !~ '^[0-9a-fA-F]{64}$'" in asset_sql
     assert "(case _mime_type when 'image/png'" in asset_sql
