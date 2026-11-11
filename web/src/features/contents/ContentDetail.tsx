@@ -20,7 +20,6 @@ import {
   type Review,
   type FindingWithDecision,
   type ReviewPreviewResponse,
-  ReviewEngineError,
   uploadVisualAsset,
   type VisualAssetUploadResponse,
 } from '../../lib/data';
@@ -226,11 +225,12 @@ function FindingCard({
 }
 
 function ReviewPreviewDialog({
-  preview, imageConsent, confirming, onImageConsentChange, onConfirm, onCancel,
+  preview, imageConsent, confirming, confirmationError, onImageConsentChange, onConfirm, onCancel,
 }: {
   preview: ReviewPreviewResponse;
   imageConsent: boolean;
   confirming: boolean;
+  confirmationError: string | null;
   onImageConsentChange: (checked: boolean) => void;
   onConfirm: () => void;
   onCancel: () => void;
@@ -292,6 +292,11 @@ function ReviewPreviewDialog({
                 <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-3 text-xs text-gray-700">{preview.vision_provider_preview.user_content}</pre>
               </details>
             </section>
+          )}
+          {confirmationError && (
+            <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+              {confirmationError}
+            </p>
           )}
           {preview.image_consent_required ? (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 space-y-3">
@@ -451,6 +456,7 @@ export function ContentDetail() {
   const [reviewPreview, setReviewPreview] = useState<ReviewPreviewResponse | null>(null);
   const [imageConsent, setImageConsent] = useState(false);
   const [confirmingPreview, setConfirmingPreview] = useState(false);
+  const [previewConfirmError, setPreviewConfirmError] = useState<string | null>(null);
   const [applyingDecisions, setApplyingDecisions] = useState(false);
   const [uploadedVisualAssets, setUploadedVisualAssets] = useState<UploadedVisualAsset[]>([]);
   const [isUploadingVisualAssets, setIsUploadingVisualAssets] = useState(false);
@@ -507,6 +513,7 @@ export function ContentDetail() {
   useEffect(() => {
     setReviewPreview(null);
     setImageConsent(false);
+    setPreviewConfirmError(null);
     setReviewActionError(null);
   }, [contentId]);
 
@@ -815,8 +822,11 @@ const startPolling = useCallback(() => {
       }
 
       if (uploadedCount > 0) {
-        // A newly attached image changes the review input set. Require a fresh
-        // preview/confirmation rather than leaving an old review looking current.
+        // A newly attached image changes the review input set. Invalidate any
+        // preview token created before the upload; it cannot safely be confirmed.
+        setReviewPreview(null);
+        setImageConsent(false);
+        setPreviewConfirmError(null);
         stopPolling();
         setLatestReview(null);
         setFindings([]);
@@ -890,6 +900,7 @@ const startPolling = useCallback(() => {
     startingReviewRef.current = true;
     setStartingReview(true);
     setReviewActionError(null);
+    setPreviewConfirmError(null);
     setToastError(null);
 
     // Prefer the explicitly selected revision, then fall back to the loaded
@@ -918,31 +929,64 @@ const startPolling = useCallback(() => {
   const handleConfirmReview = async () => {
     if (!reviewPreview || confirmingPreviewRef.current) return;
     if (reviewPreview.image_consent_required && !imageConsent) {
-      setToastError('Explicit image consent is required before this review can start.');
+      setPreviewConfirmError('Explicit image consent is required before this review can start.');
       return;
     }
     confirmingPreviewRef.current = true;
     setConfirmingPreview(true);
+    setPreviewConfirmError(null);
     setToastError(null);
     try {
       await confirmReviewPreview(reviewPreview.preview_id, reviewPreview.confirmation_token, imageConsent);
       const confirmedRevisionId = reviewPreview.revision_id;
       setReviewPreview(null);
       setImageConsent(false);
+      setPreviewConfirmError(null);
       await loadReviewData(confirmedRevisionId);
     } catch (err) {
-      if (err instanceof ReviewEngineError && err.reason === 'preview_already_consumed') {
+      const errorObject = err && typeof err === 'object'
+        ? err as { message?: unknown; reason?: unknown; status?: unknown }
+        : undefined;
+      const message = typeof errorObject?.message === 'string'
+        ? errorObject.message
+        : 'Failed to confirm review';
+      const reason = typeof errorObject?.reason === 'string' ? errorObject.reason : undefined;
+
+      if (reason === 'preview_already_consumed') {
         const confirmedRevisionId = reviewPreview.revision_id;
         setReviewPreview(null);
         setImageConsent(false);
+        setPreviewConfirmError(null);
         await loadReviewData(confirmedRevisionId);
         setToastError('This preview was already confirmed. Review status has been refreshed.');
-      } else if (err instanceof ReviewEngineError && err.reason === 'preview_expired') {
+      } else if (reason === 'preview_expired') {
         setReviewPreview(null);
         setImageConsent(false);
-        setToastError('This preview expired. Prepare a fresh preview before starting the review.');
+        setPreviewConfirmError(null);
+        setToastError('This preview expired. Click Start Review again to prepare a fresh preview.');
+      } else if ([
+        'preview_integrity_failed',
+        'assets_changed',
+        'asset_changed',
+        'revision_changed',
+        'not_latest_revision',
+        'revision_not_editable',
+        'active_kit_changed',
+        'kit_changed',
+        'policy_changed',
+        'preview_not_available',
+      ].includes(reason || '')) {
+        setReviewPreview(null);
+        setImageConsent(false);
+        setPreviewConfirmError(null);
+        const guidance = reason === 'assets_changed' || reason === 'asset_changed'
+          ? 'Attached images changed after this preview was created.'
+          : 'The revision, brand kit, or confidentiality settings changed after this preview was created.';
+        setToastError(`${guidance} No review was started. Click Start Review again to prepare a fresh preview using the current inputs.`);
       } else {
-        setToastError(err instanceof Error ? err.message : 'Failed to confirm review');
+        // Keep unexpected 4xx/5xx errors inside the dialog; the page-level
+        // toast sits behind the modal and previously made these failures look inert.
+        setPreviewConfirmError(message);
       }
     } finally {
       setConfirmingPreview(false);
@@ -1447,12 +1491,14 @@ const startPolling = useCallback(() => {
           preview={reviewPreview}
           imageConsent={imageConsent}
           confirming={confirmingPreview}
+          confirmationError={previewConfirmError}
           onImageConsentChange={setImageConsent}
           onConfirm={handleConfirmReview}
           onCancel={() => {
             if (!confirmingPreview) {
               setReviewPreview(null);
               setImageConsent(false);
+              setPreviewConfirmError(null);
             }
           }}
         />

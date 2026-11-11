@@ -670,6 +670,46 @@ describe('ContentDetail', () => {
       expect(mockCreateReviewPreview).toHaveBeenCalledWith('revision-1');
     });
 
+    it('closes a stale preview and explains when attached images changed after preview creation', { timeout: 15000 }, async () => {
+      mockGetLatestReviewForRevision.mockResolvedValue(null);
+      const conflict = Object.assign(new Error('Attached images changed after preview'), {
+        status: 409,
+        reason: 'assets_changed',
+      });
+      mockConfirmReviewPreview.mockRejectedValueOnce(conflict);
+
+      await renderAndWaitForLoad(<ContentDetail />);
+      fireEvent.click(screen.getByRole('button', { name: 'Start Review' }));
+      await screen.findByRole('dialog');
+      const consent = screen.getByRole('checkbox', {
+        name: /explicitly consent to sending them in their stored form/i,
+      });
+      fireEvent.click(consent);
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm & Run Review' }));
+
+      expect(await screen.findByText(/Attached images changed after this preview was created/)).toBeInTheDocument();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Start Review' })).toBeEnabled();
+      expect(mockConfirmReviewPreview).toHaveBeenCalledWith('preview-1', 'one-time-token', true);
+    });
+
+    it('shows unexpected confirmation failures inside the open preview dialog', { timeout: 15000 }, async () => {
+      mockGetLatestReviewForRevision.mockResolvedValue(null);
+      mockConfirmReviewPreview.mockRejectedValueOnce(new Error('Temporary provider queue outage'));
+
+      await renderAndWaitForLoad(<ContentDetail />);
+      fireEvent.click(screen.getByRole('button', { name: 'Start Review' }));
+      await screen.findByRole('dialog');
+      const consent = screen.getByRole('checkbox', {
+        name: /explicitly consent to sending them in their stored form/i,
+      });
+      fireEvent.click(consent);
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm & Run Review' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Temporary provider queue outage');
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
     it('shows an actionable error instead of silently ignoring Start Review when no revision is loaded', { timeout: 15000 }, async () => {
       mockGetLatestRevision.mockResolvedValueOnce(null);
       mockGetRevisions.mockResolvedValueOnce([]);

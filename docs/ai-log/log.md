@@ -335,3 +335,30 @@ As of this entry, Improvement 2's live path has successfully completed `POST /v1
 - Supported image formats deliberately match the backend and visual asset service: PNG, JPEG, WebP. GIF/SVG are not accepted by the existing visual-analysis storage pipeline.
 - The upload section shows previews uploaded during the current page session. Previously linked images remain visible in the review privacy preview; a persistent asset gallery/list endpoint is not part of this UI addition.
 - No backend code or database migration was changed in this upload UI slice.
+
+
+## 2026-11-12 — Review Confirmation 409: Stale Asset Manifest + Hidden UI Error
+
+### Live root cause confirmed from staging database and Render request logs
+
+The latest preview was created at `2026-11-11 20:25:33.847544+00` with an empty `asset_manifest` (`[]`, zero assets). The PNG was successfully uploaded and linked to the same revision at `20:25:36.934938+00`. Confirmation attempts began at `20:25:40.831221+00` and repeatedly returned HTTP 409.
+
+`confirm_review_preview()` intentionally re-queries the revision's visual-asset associations and compares them to the frozen preview manifest. Because the new image was linked after preview creation, `current_ids != preview_asset_ids` and the endpoint correctly raises `assets_changed`. The preview row remained unconsumed. This is expected integrity enforcement, not a provider/Gemini failure.
+
+### Frontend defect and correction
+
+The confirm handler previously sent all unknown errors to the page-level toast. The toast is behind the open modal, so the user saw the click animation but no actionable error. Also, a successful upload now explicitly clears any stale preview state and image consent.
+
+Changes:
+- Invalidate the preview token and image consent after any successful upload.
+- Handle known stale-preview reasons (`assets_changed`, `asset_changed`, `revision_changed`, `not_latest_revision`, `revision_not_editable`, `active_kit_changed`, `kit_changed`, `policy_changed`, `preview_integrity_failed`, `preview_not_available`) by closing the stale dialog and showing actionable guidance to prepare a fresh preview.
+- Keep unexpected confirmation/network/server errors visible inside the preview dialog via a modal-local alert instead of a toast hidden behind it.
+- Existing `preview_expired` and `preview_already_consumed` handling remains, with modal closure and review status refresh as appropriate.
+- Added regression tests for stale image-manifest conflicts and visible unexpected confirmation failures.
+
+### Verification
+
+- Frontend suite: **196 passed across 11 files**.
+- Frontend production build: succeeded; existing ineffective dynamic-import warning remains.
+- `git diff --check`: passed.
+- No backend or database changes were required for this issue.
