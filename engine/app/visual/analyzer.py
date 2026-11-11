@@ -26,7 +26,7 @@ from app.llm.provider_factory import get_provider_with_fallback
 from app.llm.prompt_builder import generate_nonce
 from app.models.pipeline import (
     ProviderRequest,
-    ModelFindingCandidate,
+    VisualModelFindingCandidate,
     ProviderError,
     RateLimitedError,
     TimeoutError,
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 class VisualAnalysisResult:
     """Result of visual analysis for one or more assets."""
     deterministic_findings: List[VisualFindingCandidate]
-    model_findings: List[ModelFindingCandidate]
+    model_findings: List[VisualModelFindingCandidate]
     llm_status: str  # "ok", "skipped", "failed"
     warnings: List[str]
     raw_model_count: int
@@ -261,7 +261,7 @@ class VisualAnalyzer:
         channel: str,
         visual_guidelines: dict,
         approved_hashes: List[str],
-    ) -> List[ModelFindingCandidate]:
+    ) -> List[VisualModelFindingCandidate]:
         """Run vision model analysis on assets."""
         provider = get_provider_with_fallback()
 
@@ -316,7 +316,7 @@ class VisualAnalyzer:
         model_candidates = []
         for finding in raw_findings:
             try:
-                candidate = ModelFindingCandidate.model_validate(finding)
+                candidate = VisualModelFindingCandidate.model_validate(finding)
                 model_candidates.append(candidate)
             except Exception as e:
                 logger.warning("visual_finding_validation_failed", extra={"error": str(e), "finding": finding})

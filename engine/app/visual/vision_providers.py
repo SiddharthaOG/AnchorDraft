@@ -16,10 +16,30 @@ from app.models.pipeline import (
     UnavailableError,
     BadOutputError,
     BlockedError,
+    VisualModelFindingCandidate,
 )
 from app.llm.token_budget import estimate_tokens, TokenBudgetExceededError
 
 logger = logging.getLogger(__name__)
+
+
+# These keys are the visual rules produced by the deterministic visual checks.
+VISUAL_GUIDELINE_REF_KEYS = {
+    "logo": "LOGO-01",
+    "palette": "PALETTE-01",
+    "contrast": "CONTRAST-01",
+}
+
+
+def get_visual_guideline_ref_keys(visual_guidelines: dict) -> set[str]:
+    """Return only the visual rule keys represented in the supplied guidelines."""
+    if not isinstance(visual_guidelines, dict):
+        return set()
+    return {
+        ref_key
+        for category, ref_key in VISUAL_GUIDELINE_REF_KEYS.items()
+        if visual_guidelines.get(category)
+    }
 
 
 # Extended output schema for visual findings
@@ -36,9 +56,6 @@ VISUAL_OUTPUT_SCHEMA = {
                         "type": "string",
                         "enum": [
                             "violation",
-                            "contradicts_fact",
-                            "outdated_fact",
-                            "unsupported_claim",
                             "logo_misuse",
                             "palette_violation",
                             "contrast_violation",
@@ -100,7 +117,11 @@ def build_vision_user_content(
     # Render visual guidelines
     guidelines_lines = []
     for category, config in visual_guidelines.items():
-        guidelines_lines.append(f"[{category.upper()}] {json.dumps(config, indent=2)}")
+        ref_key = VISUAL_GUIDELINE_REF_KEYS.get(category.lower())
+        reference_label = f" | REF_KEY: {ref_key}" if ref_key else ""
+        guidelines_lines.append(
+            f"[{category.upper()}{reference_label}] {json.dumps(config, indent=2)}"
+        )
     guidelines_block = "\n".join(guidelines_lines) if guidelines_lines else "No visual guidelines configured."
 
     context_block = f"PURPOSE: {purpose}\nCHANNEL: {channel}"
@@ -297,11 +318,9 @@ class GroqVisionProvider:
             raise BadOutputError("'findings' must be array")
 
         # Validate each finding
-        from app.models.pipeline import ModelFindingCandidate
         for i, finding in enumerate(findings):
             try:
-                # Add visual-specific fields to validation
-                ModelFindingCandidate.model_validate(finding)
+                VisualModelFindingCandidate.model_validate(finding)
             except Exception as e:
                 raise BadOutputError(f"Finding {i} validation failed: {e}")
 
@@ -491,10 +510,9 @@ class GeminiVisionProvider:
         if not isinstance(findings, list):
             raise BadOutputError("'findings' must be array")
 
-        from app.models.pipeline import ModelFindingCandidate
         for i, finding in enumerate(findings):
             try:
-                ModelFindingCandidate.model_validate(finding)
+                VisualModelFindingCandidate.model_validate(finding)
             except Exception as e:
                 raise BadOutputError(f"Finding {i} validation failed: {e}")
 
