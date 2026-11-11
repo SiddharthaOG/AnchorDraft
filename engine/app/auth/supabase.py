@@ -75,6 +75,12 @@ class SupabaseClient:
         response = client.table("contents").select("*").eq("id", content_id).execute()
         return response.data[0] if response.data else None
 
+    def get_visual_asset(self, asset_id: str) -> dict | None:
+        """Get a visual asset by ID."""
+        client = self._get_client()
+        response = client.table("visual_assets").select("*").eq("id", asset_id).execute()
+        return response.data[0] if response.data else None
+
     def create_review(
         self,
         org_id: str,
