@@ -212,3 +212,25 @@ Traced the reported Start Review no-response regression against the deployed sta
 - The exact cause inside the earlier HTTP 422 response was not retained in Render logs. The frontend now exposes FastAPI's validation details on the next request; an authenticated browser retest is still required to capture and resolve any underlying request-shape issue.
 - No authenticated preview → consent → confirmation → Gemini provider call was executed in this pass. Real provider acceptance, returned findings, and audit rows remain end-to-end checks, not claimed as complete.
 - Visual asset upload → vision analysis → visual findings and UI rendering remain end-to-end checks. Automated visual and confidentiality suites pass, but this does not replace a live workflow test.
+
+
+## 2026-11-12 — Start Review Silent No-op Guard
+
+### Finding and change
+
+The review-start handler contained a silent early return when `latestRevision?.id` was unavailable: `if (!targetRevisionId || startingReviewRef.current) return`. The button could therefore be visible and clickable while the handler returned without setting loading state, showing an error, or making a request. This is a concrete no-op path consistent with the reported symptom; the screenshot alone does not prove it was the only runtime cause for the user's particular content record.
+
+The handler now resolves the target revision from the explicitly selected revision first, then the selected revision object, then the latest loaded revision. If none exists, it sets a visible inline error and releases the loading/duplicate-submission guard rather than silently returning. A regression test covers the no-revision path.
+
+### Verification
+
+- `npm run test -- --reporter=dot src/features/contents/ContentDetail.test.tsx` — 22 passed.
+- `npm run build` — succeeded; existing Vite dynamic-import warning remains.
+- Full web suite `npm test -- --reporter=dot` — 184 passed across 11 files. Existing nested-anchor React warnings remain in unrelated landing-page tests.
+- `git diff --check` — passed.
+- Commit `781f7d9 fix: prevent silent review start no-op` pushed to `feat/confidentiality-aware-processing`.
+- Vercel Preview deployment for `781f7d9` — READY; branch alias points to this deployment.
+
+### Limitation
+
+No authenticated browser automation/session is available in this pass to prove pointer hit-testing and click delivery in the user's browser. The no-revision silent-return path is fixed and regression-tested; a live retest is still needed to confirm the user's exact record now reaches the preview API.
