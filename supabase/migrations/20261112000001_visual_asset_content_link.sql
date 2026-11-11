@@ -37,20 +37,21 @@ create policy visual_asset_contents_insert on public.visual_asset_contents
 create or replace function public.link_visual_asset_to_content(
     _visual_asset_id uuid,
     _content_id uuid,
-    _revision_id uuid default null
+    _revision_id uuid default null,
+    _actor_user_id uuid
 )
 returns void
 language plpgsql security definer set search_path = ''
 as $$
 declare
-    _uid uuid := (select auth.uid());
     _org_id uuid;
     _visual_asset_org uuid;
     _content_org uuid;
     _revision_content_id uuid;
+    _actor_roles public.app_role[];
 begin
-    -- 1. Authenticate
-    if _uid is null then
+    -- 1. Validate actor user exists and is a member
+    if _actor_user_id is null then
         raise exception 'unauthenticated';
     end if;
 
@@ -76,7 +77,7 @@ begin
         raise exception 'forbidden: cross-organization asset linking';
     end if;
 
-    if not private.is_member(_content_org) then
+    if not private.is_member(_content_org, _actor_user_id) then
         raise exception 'forbidden: not member of content org';
     end if;
 
@@ -95,19 +96,28 @@ begin
         end if;
     end if;
 
-    -- 5. Insert link (idempotent via unique constraint)
+    -- 5. Get actor's roles in the organization
+    select roles into _actor_roles
+    from public.memberships
+    where org_id = _content_org and user_id = _actor_user_id;
+
+    if not found or cardinality(_actor_roles) = 0 then
+        raise exception 'forbidden: actor has no role in content org';
+    end if;
+
+    -- 6. Insert link (idempotent via unique constraint)
     insert into public.visual_asset_contents (org_id, visual_asset_id, content_id, revision_id, uploaded_by)
-    values (_content_org, _visual_asset_id, _content_id, _revision_id, _uid)
+    values (_content_org, _visual_asset_id, _content_id, _revision_id, _actor_user_id)
     on conflict (visual_asset_id, content_id) do nothing;
 
-    -- 6. Audit log
+    -- 7. Audit log
     insert into public.audit_log (org_id, actor_id, action, entity_type, entity_id, detail)
-    values (_content_org, _uid, 'visual_asset.linked', 'visual_asset', _visual_asset_id,
+    values (_content_org, _actor_user_id, 'visual_asset.linked', 'visual_asset', _visual_asset_id,
         jsonb_build_object('content_id', _content_id, 'revision_id', _revision_id));
 end $$;
 
-revoke all on function public.link_visual_asset_to_content(uuid, uuid, uuid) from public, anon;
-grant execute on function public.link_visual_asset_to_content(uuid, uuid, uuid) to authenticated;
+revoke all on function public.link_visual_asset_to_content(uuid, uuid, uuid, uuid) from public, anon;
+grant execute on function public.link_visual_asset_to_content(uuid, uuid, uuid, uuid) to authenticated;
 
 -- 2. RPC function to get visual assets for a revision
 create or replace function public.get_visual_assets_for_revision(
@@ -191,8 +201,8 @@ revoke all on function public.get_visual_assets_for_content(uuid) from public, a
 grant execute on function public.get_visual_assets_for_content(uuid) to authenticated;
 
 -- Grant execute permissions
-revoke all on function public.link_visual_asset_to_content(uuid, uuid, uuid) from public, anon;
-grant execute on function public.link_visual_asset_to_content(uuid, uuid, uuid) to authenticated;
+revoke all on function public.link_visual_asset_to_content(uuid, uuid, uuid, uuid) from public, anon;
+grant execute on function public.link_visual_asset_to_content(uuid, uuid, uuid, uuid) to authenticated;
 
 revoke all on function public.get_visual_assets_for_revision(uuid) from public, anon;
 grant execute on function public.get_visual_assets_for_revision(uuid) to authenticated;

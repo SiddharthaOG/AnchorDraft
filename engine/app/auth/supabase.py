@@ -181,6 +181,29 @@ class SupabaseClient:
             raise RuntimeError("Supabase write succeeded but returned no row")
         return response.data[0]
 
+    def link_visual_asset_to_content(
+        self,
+        visual_asset_id: str,
+        content_id: str,
+        revision_id: str,
+        actor_user_id: str,
+    ) -> None:
+        """Link a visual asset to content/revision with explicit actor identity.
+
+        Uses the service-role client but passes the authenticated user's ID
+        to the RPC for proper authorization checks.
+        """
+        client = self._get_client()
+        try:
+            client.rpc("link_visual_asset_to_content", {
+                "_visual_asset_id": visual_asset_id,
+                "_content_id": content_id,
+                "_revision_id": revision_id,
+                "_actor_user_id": actor_user_id,
+            }).execute()
+        except Exception as e:
+            raise RuntimeError(f"Failed to link visual asset to content: {e}")
+
 
 # Global client instance
 _supabase_client: "SupabaseClient | None" = None

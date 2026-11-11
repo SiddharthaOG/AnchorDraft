@@ -212,50 +212,67 @@ async def import_visual(
     clean_bytes = asset_service.strip_exif(file_bytes, content_type)
     metadata = asset_service.extract_extended_metadata(clean_bytes, content_type)
 
-    # Upload to storage
-    storage_path, metadata = asset_service.upload_asset(
-        org_id=user.org_id,
-        user_id=user.user_id,
-        file_bytes=clean_bytes,
-        mime_type=content_type,
-        filename=file.filename or "image",
-    )
-
-    # Create asset record in database
-    asset_record = asset_service.create_asset_record(
-        org_id=user.org_id,
-        user_id=user.user_id,
-        storage_path=storage_path,
-        mime_type=content_type,
-        metadata=metadata,
-    )
-
-    if not asset_record:
-        raise ValidationError("Failed to create asset record")
-
-    asset_id = asset_record.get("id") or asset_record.get("id")
-
-    # Link asset to content/revision
-    from app.auth.supabase import get_supabase_client
-    supabase = get_supabase_client()
+    # Upload to storage, create asset record, and link - all with cleanup on failure
     try:
-        supabase._get_client().rpc("link_visual_asset_to_content", {
-            "_visual_asset_id": str(asset_id),
-            "_content_id": str(content_id),
-            "_revision_id": str(revision_id),
-        }).execute()
+        # Upload to storage
+        storage_path, metadata = asset_service.upload_asset(
+            org_id=user.org_id,
+            user_id=user.user_id,
+            file_bytes=clean_bytes,
+            mime_type=content_type,
+            filename=file.filename or "image",
+        )
+
+        # Create asset record in database
+        asset_record = asset_service.create_asset_record(
+            org_id=user.org_id,
+            user_id=user.user_id,
+            storage_path=storage_path,
+            mime_type=content_type,
+            metadata=metadata,
+        )
+
+        if not asset_record:
+            raise ValidationError("Failed to create asset record")
+
+        asset_id = asset_record.get("id") or asset_record.get("id")
+
+        # Link asset to content/revision
+        from app.auth.supabase import get_supabase_client
+        supabase = get_supabase_client()
+        try:
+            supabase.link_visual_asset_to_content(
+                visual_asset_id=str(asset_id),
+                content_id=str(content_id),
+                revision_id=str(revision_id),
+                actor_user_id=user.user_id,
+            )
+        except Exception as e:
+            raise ValidationError(f"Failed to link asset to content: {e}")
+
+        # Generate signed URL for immediate access
+        signed_url = asset_service.get_signed_url(storage_path)
+
+        return {
+            "asset_id": str(asset_id),
+            "width": metadata.width,
+            "height": metadata.height,
+            "mime_type": content_type,
+            "checksum": metadata.checksum,
+            "signed_url": signed_url,
+            "expires_in": 3600,
+        }
+
+    except ValidationError:
+        raise
+    except TooLargeError:
+        raise
+    except UnsupportedMediaTypeError:
+        raise
+    except RuntimeError as e:
+        # Handle storage/upload errors
+        raise ValidationError(f"Upload failed: {e}")
     except Exception as e:
-        raise ValidationError(f"Failed to link asset to content: {e}")
-
-    # Generate signed URL for immediate access
-    signed_url = asset_service.get_signed_url(storage_path)
-
-    return {
-        "asset_id": str(asset_id),
-        "width": metadata.width,
-        "height": metadata.height,
-        "mime_type": content_type,
-        "checksum": metadata.checksum,
-        "signed_url": signed_url,
-        "expires_in": 3600,
-    }
+        # Any other unexpected error
+        logger.error("visual_upload_failed", extra={"error": str(e), "content_id": str(content_id)})
+        raise ValidationError(f"Upload failed: {e}")

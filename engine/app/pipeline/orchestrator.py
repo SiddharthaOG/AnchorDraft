@@ -384,29 +384,23 @@ class ReviewOrchestrator:
             {f.fact_key for f in valid_facts},
         )
 
-    async def _load_visual_asset_ids(self, revision_id: str, org_id: str) -> list:
-        """Load visual asset IDs associated with a revision."""
+    async def _load_visual_asset_ids(self, revision_id: str, org_id: str) -> list[UUID]:
+        """Load visual asset IDs explicitly associated with a revision.
+
+        Uses the revision-specific RPC to retrieve only assets explicitly linked
+        to this revision (or its parent content), enforcing organization isolation.
+        """
         try:
-            # Get revision to find content
-            revision = self.supabase.get_revision(revision_id)
-            if not revision:
-                return []
+            # Call the revision-specific RPC that enforces:
+            # - Revision exists and belongs to the organization
+            # - Assets are explicitly linked to this revision
+            # - Organization isolation is enforced
+            response = await self.supabase._get_client().rpc(
+                "get_visual_assets_for_revision",
+                {"_revision_id": revision_id},
+            ).execute()
 
-            content_id = revision["content_id"]
-            # Get visual assets linked to this content/revision
-            # For now, we'll look for assets uploaded by the same org
-            # In a full implementation, there would be a junction table
-            content = self.supabase.get_content(content_id)
-            if not content:
-                return []
-
-            # Get recent assets for this org
-            try:
-                response = await self.supabase._get_client().table("visual_assets").select("id").eq("org_id", org_id).order("created_at", desc=True).limit(10).execute()
-                return [UUID(asset["id"]) for asset in (response.data or [])]
-            except Exception as e:
-                logger.error("load_visual_assets_failed", extra={"org_id": org_id, "error": str(e)})
-                return []
+            return [UUID(asset["id"]) for asset in (response.data or [])]
         except Exception as e:
             logger.error("load_visual_asset_ids_failed", extra={"revision_id": revision_id, "error": str(e)})
             return []

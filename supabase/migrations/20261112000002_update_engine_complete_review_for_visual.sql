@@ -1,10 +1,8 @@
 -- Migration: 20261112000002_update_engine_complete_review_for_visual.sql
 -- Description: Update engine_complete_review to handle visual findings with asset_id and region
 
--- Drop and recreate engine_complete_review with visual finding support
-drop function if exists public.engine_complete_review(
-    uuid, public.review_status, public.llm_status, jsonb, int, int, jsonb, text, text, jsonb
-);
+-- Update engine_complete_review to handle visual findings with asset_id and region
+-- Preserves all original behavior including claim-token fencing, atomic persistence, recovery behavior
 
 create or replace function public.engine_complete_review(
     _review_id uuid,
@@ -16,7 +14,8 @@ create or replace function public.engine_complete_review(
     _validator_stats jsonb,
     _model text,
     _prompt_version text,
-    _findings jsonb
+    _findings jsonb,
+    _claim_token uuid
 )
 returns void
 language plpgsql security definer set search_path = ''
@@ -29,7 +28,7 @@ declare
     _asset_id uuid;
     _region jsonb;
 begin
-    -- 1. Get review row (locked for update)
+    -- 1. Get review row (locked for update) - preserves claim-token fencing
     select * into _review
     from public.reviews
     where id = _review_id
@@ -37,6 +36,13 @@ begin
 
     if not found then
         raise exception 'not_found';
+    end if;
+
+    -- 2. Validate claim_token (MANDATORY - reject NULL and mismatched tokens)
+    if _claim_token is null
+       or _review.claim_token is null
+       or _review.claim_token <> _claim_token then
+        raise exception 'claim_token_mismatch';
     end if;
 
     -- 2. Update review row
@@ -49,7 +55,9 @@ begin
         validator_stats = _validator_stats,
         model = _model,
         prompt_version = _prompt_version,
-        finished_at = now()
+        finished_at = now(),
+        claim_token = null,
+        claimed_at = null
     where id = _review_id;
 
     -- 3. If status is done, insert findings
@@ -154,12 +162,13 @@ begin
     values (_review.org_id, null, 'review.completed', 'review', _review_id, jsonb_build_object('status', _status, 'llm_status', _llm_status));
 end $$;
 
--- Service-only function: engine_fail_review
+-- Service-only function: engine_fail_review (preserve original behavior with claim_token validation)
 drop function if exists public.engine_fail_review(uuid, text);
 
 create or replace function public.engine_fail_review(
     _review_id uuid,
-    _error text
+    _error text,
+    _claim_token uuid
 )
 returns void
 language plpgsql security definer set search_path = ''
@@ -176,10 +185,19 @@ begin
         raise exception 'not_found';
     end if;
 
+    -- Validate claim_token (MANDATORY - reject NULL and mismatched tokens)
+    if _claim_token is null
+       or _review.claim_token is null
+       or _review.claim_token <> _claim_token then
+        raise exception 'claim_token_mismatch';
+    end if;
+
     update public.reviews
     set status = 'failed',
         error = _error,
-        finished_at = now()
+        finished_at = now(),
+        claim_token = null,
+        claimed_at = null
     where id = _review_id;
 
     insert into public.audit_log (org_id, actor_id, action, entity_type, entity_id, detail)
@@ -187,9 +205,9 @@ begin
 end $$;
 
 -- Revoke from public/anon/authenticated, grant only to service_role
-revoke all on function public.engine_complete_review(uuid,public.review_status,public.llm_status,jsonb,int,int,jsonb,text,text,jsonb) from public, anon, authenticated;
-revoke all on function public.engine_fail_review(uuid,text) from public, anon, authenticated;
+revoke all on function public.engine_complete_review(uuid,public.review_status,public.llm_status,jsonb,int,int,jsonb,text,text,jsonb,uuid) from public, anon, authenticated;
+revoke all on function public.engine_fail_review(uuid,text,uuid) from public, anon, authenticated;
 
 -- Grant execute to service_role (the review service uses this role)
-grant execute on function public.engine_complete_review(uuid,public.review_status,public.llm_status,jsonb,int,int,jsonb,text,text,jsonb) to service_role;
-grant execute on function public.engine_fail_review(uuid,text) to service_role;
+grant execute on function public.engine_complete_review(uuid,public.review_status,public.llm_status,jsonb,int,int,jsonb,text,text,jsonb,uuid) to service_role;
+grant execute on function public.engine_fail_review(uuid,text,uuid) to service_role;

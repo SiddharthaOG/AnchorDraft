@@ -238,7 +238,7 @@ class VisualAssetService:
         filename: str,
     ) -> tuple[str, VisualAssetMetadata]:
         """
-        Upload a visual asset to Supabase Storage.
+        Upload a visual asset to Supabase Storage with cleanup on failure.
 
         Returns:
             Tuple of (storage_path, metadata).
@@ -256,27 +256,70 @@ class VisualAssetService:
         asset_id = uuid4()
         storage_path = f"{org_id}/{asset_id}{ext}"
 
-        # Upload to Supabase Storage
-        bucket = client.storage.from_("visual-assets")
-        try:
-            bucket.upload(
-                path=storage_path,
-                file=clean_bytes,
-                file_options={
-                    "content-type": mime_type,
-                    "cache-control": "3600",
-                },
-            )
-        except Exception as e:
-            # Check if it's a duplicate (same checksum)
-            if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
-                # Try to get existing asset
-                existing = self.get_asset_by_checksum(org_id, metadata.checksum)
-                if existing:
-                    return existing.storage_path, metadata
-            raise RuntimeError(f"Failed to upload to storage: {e}")
+        # Track cleanup state
+        uploaded_to_storage = False
+        created_asset_record = False
 
-        return storage_path, metadata
+        try:
+            # Upload to Supabase Storage
+            bucket = client.storage.from_("visual-assets")
+            try:
+                bucket.upload(
+                    path=storage_path,
+                    file=clean_bytes,
+                    file_options={
+                        "content-type": mime_type,
+                        "cache-control": "3600",
+                    },
+                )
+                uploaded_to_storage = True
+            except Exception as e:
+                # Check if it's a duplicate (same checksum)
+                if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+                    # Try to get existing asset
+                    existing = self.get_asset_by_checksum(org_id, metadata.checksum)
+                    if existing:
+                        return existing.storage_path, metadata
+                raise RuntimeError(f"Failed to upload to storage: {e}")
+
+            # Create asset record in database
+            asset_record = self.create_asset_record(
+                org_id=org_id,
+                user_id=user_id,
+                storage_path=storage_path,
+                mime_type=mime_type,
+                metadata=metadata,
+            )
+
+            if not asset_record:
+                raise RuntimeError("Failed to create asset record in database")
+
+            created_asset_record = True
+
+            return storage_path, metadata
+
+        except Exception:
+            # Cleanup on failure
+            try:
+                if uploaded_to_storage:
+                    bucket = client.storage.from_("visual-assets")
+                    bucket.remove([storage_path])
+            except Exception as cleanup_error:
+                logger.warning("storage_cleanup_failed", extra={"path": storage_path, "error": str(cleanup_error)})
+
+            try:
+                if created_asset_record:
+                    # Try to delete the asset record if we can identify it
+                    # We'll use the checksum to find it
+                    existing = self.get_asset_by_checksum(org_id, metadata.checksum)
+                    if existing:
+                        client = self._get_client()
+                        client.table("visual_assets").delete().eq("id", existing["id"]).eq("org_id", str(org_id)).execute()
+            except Exception as cleanup_error:
+                logger.warning("asset_record_cleanup_failed", extra={"error": str(cleanup_error)})
+
+            # Re-raise the original exception
+            raise
 
     def get_asset_by_checksum(self, org_id: UUID, checksum: str) -> Optional[dict]:
         """Get existing asset by checksum (for deduplication)."""
