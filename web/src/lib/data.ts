@@ -814,6 +814,33 @@ export class ReviewEngineError extends Error {
   }
 }
 
+function getApiErrorDetails(payload: unknown): {
+  message?: string;
+  reason?: string;
+  retryAfterSeconds?: number;
+} {
+  if (!payload || typeof payload !== 'object') return {};
+  const body = payload as Record<string, unknown>;
+  const detail = body.detail && typeof body.detail === 'object'
+    ? body.detail as Record<string, unknown>
+    : undefined;
+  const nestedError = detail?.error && typeof detail.error === 'object'
+    ? detail.error as Record<string, unknown>
+    : undefined;
+  const topLevelError = body.error && typeof body.error === 'object'
+    ? body.error as Record<string, unknown>
+    : undefined;
+  const apiError = nestedError || topLevelError;
+  const rawMessage = apiError?.message ?? (typeof detail === 'string' ? detail : undefined);
+  const rawRetryAfter = apiError?.retry_after_seconds;
+
+  return {
+    message: typeof rawMessage === 'string' ? rawMessage : undefined,
+    reason: typeof apiError?.reason === 'string' ? apiError.reason : undefined,
+    retryAfterSeconds: typeof rawRetryAfter === 'number' ? rawRetryAfter : undefined,
+  };
+}
+
 export async function startReview(revisionId: string): Promise<StartReviewResponse> {
   const token = await getAuthToken();
   const controller = new AbortController();
@@ -833,10 +860,15 @@ export async function startReview(revisionId: string): Promise<StartReviewRespon
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      const message = errorData.error?.message || `Review start failed: ${response.status} ${response.statusText}`;
-      const reason = errorData.error?.reason;
-      const retryAfter = errorData.error?.retry_after_seconds;
-      throw new ReviewEngineError(message, response.status, undefined, reason, retryAfter);
+      const apiError = getApiErrorDetails(errorData);
+      const message = apiError.message || `Review start failed: ${response.status} ${response.statusText}`;
+      throw new ReviewEngineError(
+        message,
+        response.status,
+        undefined,
+        apiError.reason,
+        apiError.retryAfterSeconds,
+      );
     }
 
     const data = (await response.json()) as StartReviewResponse;
@@ -943,7 +975,8 @@ export async function lintKit(kitId: string): Promise<KitLintResponse> {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      const message = errorData.error?.message || `Lint failed: ${response.status} ${response.statusText}`;
+      const apiError = getApiErrorDetails(errorData);
+      const message = apiError.message || `Lint failed: ${response.status} ${response.statusText}`;
       throw new KitLintError(message, response.status);
     }
 
