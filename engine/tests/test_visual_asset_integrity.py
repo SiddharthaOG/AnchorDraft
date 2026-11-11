@@ -184,6 +184,7 @@ def test_sql_migrations_enforce_required_database_contracts():
 
     assert "_actor_user_id uuid" in asset_sql
     assert "_checksum !~ '^[0-9a-fA-F]{64}$'" in asset_sql
+    assert "(case _mime_type when 'image/png'" in asset_sql
     assert "revoke all on function public.get_visual_assets_for_revision(uuid, uuid)" in link_sql
     assert "grant execute on function public.get_visual_assets_for_revision(uuid, uuid) to service_role" in link_sql
     assert "get_visual_assets_for_revision(uuid)" not in link_sql

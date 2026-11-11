@@ -36,7 +36,7 @@ begin
         raise exception 'validation: unsupported visual asset MIME type';
     end if;
     if _storage_path <> _org_id::text || '/' || _requested_asset_id::text ||
-       case _mime_type when 'image/png' then '.png' when 'image/jpeg' then '.jpg' else '.webp' end then
+       (case _mime_type when 'image/png' then '.png' when 'image/jpeg' then '.jpg' else '.webp' end) then
         raise exception 'validation: storage filename extension or asset UUID mismatch';
     end if;
     if _width is null or _width <= 0 or _height is null or _height <= 0 then
