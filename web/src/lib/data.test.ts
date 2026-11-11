@@ -97,6 +97,43 @@ describe('Data Access Layer', () => {
     // Reset if needed
   });
 
+  describe('Content revision queries', () => {
+    it('loads the latest revision from the base table with the canonical id field', async () => {
+      const revision = {
+        id: 'revision-2',
+        org_id: 'org-1',
+        content_id: 'content-1',
+        version: 2,
+        parent_revision_id: 'revision-1',
+        body: 'Latest body',
+        source: 'manual',
+        created_by: 'user-1',
+        created_at: '2026-11-12T10:00:00Z',
+      };
+      const mockChain = createMockChain();
+      mockChain.single.mockResolvedValueOnce({ data: revision, error: null });
+      mockFrom.mockReturnValueOnce(mockChain);
+
+      const result = await getLatestRevision('content-1');
+
+      expect(mockFrom).toHaveBeenCalledWith('revisions');
+      expect(mockChain.select).toHaveBeenCalledWith('*');
+      expect(mockChain.eq).toHaveBeenCalledWith('content_id', 'content-1');
+      expect(mockChain.order).toHaveBeenCalledWith('version', { ascending: false });
+      expect(mockChain.limit).toHaveBeenCalledWith(1);
+      expect(result).toEqual(revision);
+      expect(result?.id).toBe('revision-2');
+    });
+
+    it('returns null when content has no revisions', async () => {
+      const mockChain = createMockChain();
+      mockChain.single.mockResolvedValueOnce({ data: null, error: { code: 'PGRST116', message: 'No rows' } });
+      mockFrom.mockReturnValueOnce(mockChain);
+
+      await expect(getLatestRevision('content-empty')).resolves.toBeNull();
+    });
+  });
+
   describe('RPC function wrappers', () => {
     it('createContent calls create_content RPC with correct args', async () => {
       const mockResult = { content_id: 'content-1', revision_id: 'rev-1' };

@@ -265,10 +265,15 @@ export async function getContentStats(orgId: string): Promise<ContentStats> {
 }
 
 export async function getLatestRevision(contentId: string): Promise<Revision | null> {
+  // Query the base table so the result has the complete Revision contract,
+  // including `id`. v_latest_revision exposes this column as `revision_id`,
+  // which previously leaked through as a Revision with an undefined `id`.
   const { data, error } = await supabase
-    .from('v_latest_revision')
+    .from('revisions')
     .select('*')
     .eq('content_id', contentId)
+    .order('version', { ascending: false })
+    .limit(1)
     .single();
 
   if (error && error.code !== 'PGRST116') {

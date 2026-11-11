@@ -234,3 +234,25 @@ The handler now resolves the target revision from the explicitly selected revisi
 ### Limitation
 
 No authenticated browser automation/session is available in this pass to prove pointer hit-testing and click delivery in the user's browser. The no-revision silent-return path is fixed and regression-tested; a live retest is still needed to confirm the user's exact record now reaches the preview API.
+
+
+## 2026-11-12 — Root Cause Fix: Latest Revision Identifier Contract
+
+### Root cause
+
+The `v_latest_revision` view exposes the revision primary key as `revision_id` (see `supabase/migrations/20261104000006_views.sql`), while `getLatestRevision()` returned that row directly as the `Revision` interface, whose primary-key field is `id`. `ContentDetail.loadContent()` then assigned `revisionIdRef.current = rev?.id ?? null` and `latestRevision = rev`; therefore a content item with revisions could render its body/version but still have no usable `latestRevision.id`, causing Start Review to report that no revision was loaded.
+
+### Fix
+
+Changed `getLatestRevision()` to query the base `revisions` table ordered by descending version and limited to one row. This returns the canonical full `Revision` shape and avoids maintaining a fragile view-to-Revision field mapping. Added tests for the canonical `id` contract and the no-revisions case.
+
+### Verification
+
+- Targeted data + ContentDetail tests: **100 passed**.
+- Full frontend suite: **186 passed across 11 files**.
+- Frontend production build: succeeded; pre-existing Vite dynamic-import warning remains.
+- `git diff --check`: passed.
+
+### Scope
+
+This fixes the frontend revision-loading contract shared by both Improvement 1 and Improvement 2 workflows. It does not bypass review authorization, preview confirmation, confidentiality policy checks, or image consent.
