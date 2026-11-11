@@ -83,7 +83,10 @@ Hard rules:
 7. Explanations: at most two plain-language sentences.
    Confidence: 0.9 or more for a clear violation, 0.6 to 0.9 likely, below 0.6
    uncertain.
-8. Output JSON that matches the schema, and nothing else."""
+8. Output JSON that matches the schema, and nothing else.
+9. Bracketed tokens such as [EMAIL-xxxxxxxx] or [CUSTOM_TERM-xxxxxxxx] are
+   redaction placeholders. Treat them as opaque text: never infer their values,
+   never remove or alter them, and preserve them exactly when quoting the DRAFT."""
 
 
 # Output schema for structured output (matches ModelFindingCandidate)

@@ -15,7 +15,8 @@ const {
   mockGetPendingSignoffs,
   mockCreateRevision,
   mockSubmitContent,
-  mockStartReview,
+  mockCreateReviewPreview,
+  mockConfirmReviewPreview,
   mockRecordDecision,
   mockApplyDecisions,
 } = vi.hoisted(() => ({
@@ -27,7 +28,8 @@ const {
   mockGetPendingSignoffs: vi.fn(),
   mockCreateRevision: vi.fn(),
   mockSubmitContent: vi.fn(),
-  mockStartReview: vi.fn(),
+  mockCreateReviewPreview: vi.fn(),
+  mockConfirmReviewPreview: vi.fn(),
   mockRecordDecision: vi.fn(),
   mockApplyDecisions: vi.fn(),
 }));
@@ -41,7 +43,8 @@ vi.mock('../../lib/data', () => ({
   getPendingSignoffs: mockGetPendingSignoffs,
   createRevision: mockCreateRevision,
   submitContent: mockSubmitContent,
-  startReview: mockStartReview,
+  createReviewPreview: mockCreateReviewPreview,
+  confirmReviewPreview: mockConfirmReviewPreview,
   recordDecision: mockRecordDecision,
   applyDecisions: mockApplyDecisions,
 }));
@@ -141,7 +144,42 @@ describe('ContentDetail', () => {
     mockGetPendingSignoffs.mockResolvedValue(defaultSignoffs);
     mockCreateRevision.mockResolvedValue({ revision_id: 'revision-2', version: 2 });
     mockSubmitContent.mockResolvedValue(undefined);
-    mockStartReview.mockResolvedValue({ review_id: 'review-2', status: 'queued', deduplicated: false, kit_id: 'kit-1', kit_version: 1 });
+    mockCreateReviewPreview.mockResolvedValue({
+      preview_id: 'preview-1',
+      revision_id: 'revision-1',
+      confirmation_token: 'one-time-token',
+      expires_at: '2026-11-11T12:10:00Z',
+      redacted_draft: 'Contact [EMAIL-12345678]',
+      text_provider_preview: { system_instruction: 'Review safely', user_content: 'Contact [EMAIL-12345678]' },
+      vision_provider_preview: {
+        system_instruction: 'Inspect image',
+        user_content: 'Analyse attached image asset-1',
+      },
+      assets: [{
+        id: 'asset-1',
+        checksum: 'a'.repeat(64),
+        mime_type: 'image/png',
+        width: 100,
+        height: 100,
+        preview_url: 'https://storage.example/asset.png',
+      }],
+      image_consent_required: true,
+      redaction_summary: {
+        total_matches: 1,
+        by_type: { EMAIL: 1 },
+        original_chars: 25,
+        redacted_chars: 20,
+        policy_version: 1,
+      },
+      payload_sha256: 'b'.repeat(64),
+    });
+    mockConfirmReviewPreview.mockResolvedValue({
+      review_id: 'review-2',
+      status: 'queued',
+      deduplicated: false,
+      kit_id: 'kit-1',
+      kit_version: 1,
+    });
     mockRecordDecision.mockResolvedValue({ decision_id: 'decision-1' });
     mockApplyDecisions.mockResolvedValue({ revision_id: 'revision-2', version: 2, applied: 1, skipped: [] });
   });
@@ -179,15 +217,15 @@ describe('ContentDetail', () => {
   }
 
   describe('Revision Editor Visibility', () => {
-    it('shows "New Revision" button when content is editable and no editor is open', async () => {
+    it('shows "New Revision" button when content is editable and no editor is open', { timeout: 15000 }, async () => {
       await renderAndWaitForLoad(<ContentDetail />);
 
       expect(screen.getByRole('button', { name: 'New Revision' })).toBeInTheDocument();
       // Editor should not be visible initially
       expect(screen.queryByText('Create New Revision')).not.toBeInTheDocument();
-    }, { timeout: 15000 });
+    });
 
-    it('opens the revision editor when "New Revision" is clicked', async () => {
+    it('opens the revision editor when "New Revision" is clicked', { timeout: 15000 }, async () => {
       await renderAndWaitForLoad(<ContentDetail />);
 
       // Click New Revision
@@ -205,9 +243,9 @@ describe('ContentDetail', () => {
 
       // Cancel button should be present
       expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
-    }, { timeout: 15000 });
+    });
 
-    it('does not disable Create Revision button when editor opens', async () => {
+    it('does not disable Create Revision button when editor opens', { timeout: 15000 }, async () => {
       await renderAndWaitForLoad(<ContentDetail />);
 
       fireEvent.click(screen.getByRole('button', { name: 'New Revision' }));
@@ -215,9 +253,9 @@ describe('ContentDetail', () => {
       await waitFor(() => {
         expect(screen.getByRole('button', { name: 'Create Revision' })).not.toBeDisabled();
       });
-    }, { timeout: 15000 });
+    });
 
-    it('closes editor when Cancel is clicked without calling createRevision', async () => {
+    it('closes editor when Cancel is clicked without calling createRevision', { timeout: 15000 }, async () => {
       await renderAndWaitForLoad(<ContentDetail />);
 
       fireEvent.click(screen.getByRole('button', { name: 'New Revision' }));
@@ -236,9 +274,9 @@ describe('ContentDetail', () => {
 
       // createRevision should not have been called
       expect(mockCreateRevision).not.toHaveBeenCalled();
-    }, { timeout: 15000 });
+    });
 
-    it('closes editor when X button is clicked', async () => {
+    it('closes editor when X button is clicked', { timeout: 15000 }, async () => {
       await renderAndWaitForLoad(<ContentDetail />);
 
       fireEvent.click(screen.getByRole('button', { name: 'New Revision' }));
@@ -255,11 +293,11 @@ describe('ContentDetail', () => {
       await waitFor(() => {
         expect(screen.queryByText('Create New Revision')).not.toBeInTheDocument();
       });
-    }, { timeout: 15000 });
+    });
   });
 
   describe('Revision Creation Submission', () => {
-    it('calls createRevision with exact textarea content when Create Revision button is clicked', async () => {
+    it('calls createRevision with exact textarea content when Create Revision button is clicked', { timeout: 15000 }, async () => {
       await renderAndWaitForLoad(<ContentDetail />);
 
       fireEvent.click(screen.getByRole('button', { name: 'New Revision' }));
@@ -286,9 +324,9 @@ describe('ContentDetail', () => {
       await waitFor(() => {
         expect(screen.queryByText('Create New Revision')).not.toBeInTheDocument();
       });
-    }, { timeout: 15000 });
+    });
 
-    it('submits same content via Ctrl+Enter shortcut', async () => {
+    it('submits same content via Ctrl+Enter shortcut', { timeout: 15000 }, async () => {
       await renderAndWaitForLoad(<ContentDetail />);
 
       fireEvent.click(screen.getByRole('button', { name: 'New Revision' }));
@@ -315,9 +353,9 @@ describe('ContentDetail', () => {
       await waitFor(() => {
         expect(screen.queryByText('Create New Revision')).not.toBeInTheDocument();
       });
-    }, { timeout: 15000 });
+    });
 
-    it('submits same content via Meta+Enter shortcut (Mac)', async () => {
+    it('submits same content via Meta+Enter shortcut (Mac)', { timeout: 15000 }, async () => {
       await renderAndWaitForLoad(<ContentDetail />);
 
       fireEvent.click(screen.getByRole('button', { name: 'New Revision' }));
@@ -339,9 +377,9 @@ describe('ContentDetail', () => {
       });
 
       expect(mockCreateRevision).toHaveBeenCalledWith('content-1', 'Meta+Enter content');
-    }, { timeout: 15000 });
+    });
 
-    it('rejects empty content with error message', async () => {
+    it('rejects empty content with error message', { timeout: 15000 }, async () => {
       await renderAndWaitForLoad(<ContentDetail />);
 
       fireEvent.click(screen.getByRole('button', { name: 'New Revision' }));
@@ -367,9 +405,9 @@ describe('ContentDetail', () => {
 
       // Editor should remain open
       expect(screen.getByText('Create New Revision')).toBeInTheDocument();
-    }, { timeout: 15000 });
+    });
 
-    it('rejects whitespace-only content with error message', async () => {
+    it('rejects whitespace-only content with error message', { timeout: 15000 }, async () => {
       await renderAndWaitForLoad(<ContentDetail />);
 
       fireEvent.click(screen.getByRole('button', { name: 'New Revision' }));
@@ -395,9 +433,9 @@ describe('ContentDetail', () => {
 
       // Editor should remain open
       expect(screen.getByText('Create New Revision')).toBeInTheDocument();
-    }, { timeout: 15000 });
+    });
 
-    it('prevents duplicate submissions when double-clicking Create Revision', async () => {
+    it('prevents duplicate submissions when double-clicking Create Revision', { timeout: 15000 }, async () => {
       await renderAndWaitForLoad(<ContentDetail />);
 
       fireEvent.click(screen.getByRole('button', { name: 'New Revision' }));
@@ -421,9 +459,9 @@ describe('ContentDetail', () => {
 
       // Should only be called once
       expect(mockCreateRevision).toHaveBeenCalledTimes(1);
-    }, { timeout: 15000 });
+    });
 
-    it('prevents duplicate submissions via button click and Ctrl+Enter', async () => {
+    it('prevents duplicate submissions via button click and Ctrl+Enter', { timeout: 15000 }, async () => {
       await renderAndWaitForLoad(<ContentDetail />);
 
       fireEvent.click(screen.getByRole('button', { name: 'New Revision' }));
@@ -447,9 +485,9 @@ describe('ContentDetail', () => {
 
       // Should only be called once
       expect(mockCreateRevision).toHaveBeenCalledTimes(1);
-    }, { timeout: 15000 });
+    });
 
-    it('shows loading state on Create Revision button during mutation', async () => {
+    it('shows loading state on Create Revision button during mutation', { timeout: 15000 }, async () => {
       let resolveCreateRevision: (value: any) => void;
       const createRevisionPromise = new Promise(resolve => { resolveCreateRevision = resolve; });
       mockCreateRevision.mockReturnValueOnce(createRevisionPromise);
@@ -487,9 +525,9 @@ describe('ContentDetail', () => {
       await waitFor(() => {
         expect(screen.queryByText('Create New Revision')).not.toBeInTheDocument();
       });
-    }, { timeout: 15000 });
+    });
 
-    it('preserves editor and entered text on mutation failure', async () => {
+    it('preserves editor and entered text on mutation failure', { timeout: 15000 }, async () => {
       mockCreateRevision.mockRejectedValueOnce(new Error('Database error'));
 
       await renderAndWaitForLoad(<ContentDetail />);
@@ -516,21 +554,51 @@ describe('ContentDetail', () => {
 
       // Create Revision button should be enabled again
       expect(screen.getByRole('button', { name: 'Create Revision' })).not.toBeDisabled();
-    }, { timeout: 15000 });
+    });
   });
 
   describe('Existing safeguards preserved', () => {
-    it('Start Review button is enabled when no review exists', async () => {
+    it('Preview Review button is enabled when no review exists', { timeout: 15000 }, async () => {
       // Remove the default review
       mockGetLatestReviewForRevision.mockResolvedValueOnce(null);
 
       await renderAndWaitForLoad(<ContentDetail />);
 
-      expect(screen.getByRole('button', { name: 'Start Review' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Start Review' })).not.toBeDisabled();
-    }, { timeout: 15000 });
+      expect(screen.getByRole('button', { name: 'Preview Review' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Preview Review' })).not.toBeDisabled();
+    });
 
-    it('can submit when review has zero findings', async () => {
+    it('shows the redacted preview and requires explicit consent before confirmation', { timeout: 15000 }, async () => {
+      mockGetLatestReviewForRevision.mockResolvedValue(null);
+      await renderAndWaitForLoad(<ContentDetail />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Preview Review' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(screen.getAllByText('Contact [EMAIL-12345678]').length).toBeGreaterThan(0);
+      expect(screen.getByText(/Image pixels are not OCR-redacted/)).toBeInTheDocument();
+
+      const confirmButton = screen.getByRole('button', { name: 'Confirm & Run Review' });
+      expect(confirmButton).toBeDisabled();
+      expect(mockConfirmReviewPreview).not.toHaveBeenCalled();
+      const consent = screen.getByRole('checkbox', {
+        name: /explicitly consent to sending them in their stored form/i,
+      });
+      fireEvent.click(consent);
+      expect(confirmButton).toBeEnabled();
+
+      fireEvent.click(confirmButton);
+      await waitFor(() => {
+        expect(mockConfirmReviewPreview).toHaveBeenCalledWith(
+          'preview-1',
+          'one-time-token',
+          true,
+        );
+      });
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(mockCreateReviewPreview).toHaveBeenCalledWith('revision-1');
+    });
+
+    it('can submit when review has zero findings', { timeout: 15000 }, async () => {
       // Content has draft status, review is done with zero findings
       await renderAndWaitForLoad(<ContentDetail />);
 
@@ -549,9 +617,9 @@ describe('ContentDetail', () => {
           'No findings were generated. You can submit this content for approval.'
         )
       ).toBeInTheDocument();
-    }, { timeout: 15000 });
+    });
 
-    it('cannot submit when review has unresolved findings', async () => {
+    it('cannot submit when review has unresolved findings', { timeout: 15000 }, async () => {
       mockGetFindingsWithDecisionsForReview.mockResolvedValueOnce([
         {
           id: 'finding-1',
@@ -589,9 +657,9 @@ describe('ContentDetail', () => {
 
       // Submit button should not be visible (findings not decided)
       expect(screen.queryByRole('button', { name: 'Submit for Review' })).not.toBeInTheDocument();
-    }, { timeout: 15000 });
+    });
 
-    it('cannot submit when review has pending accept/edit decisions', async () => {
+    it('cannot submit when review has pending accept/edit decisions', { timeout: 15000 }, async () => {
       mockGetFindingsWithDecisionsForReview.mockResolvedValueOnce([
         {
           id: 'finding-1',
@@ -629,7 +697,7 @@ describe('ContentDetail', () => {
 
       // Submit button should not be visible (pending decisions)
       expect(screen.queryByRole('button', { name: 'Submit for Review' })).not.toBeInTheDocument();
-    }, { timeout: 15000 });
+    });
 
     it('cannot submit when review failed or unfinished', async () => {
       mockGetLatestReviewForRevision.mockResolvedValue({

@@ -368,6 +368,70 @@ def test_supabase_visual_asset_lookup_scopes_by_org():
     assert query.eq.call_args.args == ("org_id", row["org_id"])
 
 
+def attach_confirmed_preview_fixture(obj, pipeline_input, asset_id):
+    import json
+    from app.confidentiality.preview import sha256_json, sha256_text
+    from app.confidentiality.preview import confidentiality_policy_sha256
+    from app.confidentiality.models import ConfidentialityPolicy
+    from uuid import UUID
+    from app.models.pipeline import ProviderRequest
+
+    pipeline_input.preview_id = str(uuid4())
+    payload = {
+        "redacted_fields": {
+            "draft_text": "draft",
+            "purpose": "purpose",
+            "channel": "web",
+        },
+        "redacted_rules": [],
+        "redacted_facts": [],
+        "text_provider_request": ProviderRequest(
+            system_instruction="system",
+            user_content="redacted draft",
+            output_schema={},
+            randomness=0.1,
+            output_limit=100,
+            timeout_seconds=1,
+        ).model_dump(mode="json"),
+        "vision_provider_request": None,
+        "redacted_visual_guidelines": {},
+        "asset_manifest": [{
+            "id": str(asset_id),
+            "checksum": "a" * 64,
+            "mime_type": "image/png",
+            "width": 20,
+            "height": 20,
+        }],
+    }
+    record = {
+        "org_id": pipeline_input.org_id,
+        "user_id": str(uuid4()),
+        "review_requested_by": None,
+        "revision_id": str(pipeline_input.revision_id),
+        "kit_id": pipeline_input.kit_id,
+        "payload": payload,
+        "asset_manifest": payload["asset_manifest"],
+        "payload_sha256": sha256_json(payload),
+        "revision_sha256": sha256_text("draft"),
+        "kit_sha256": sha256_json({
+            "kit_id": pipeline_input.kit_id,
+            "version": 1,
+            "rules": [],
+            "facts": [],
+            "visual_guidelines": {},
+        }),
+        "policy_version": 1,
+        "policy_sha256": confidentiality_policy_sha256(
+            ConfidentialityPolicy(org_id=UUID(str(pipeline_input.org_id)))
+        ),
+        "reverse_map_ciphertext": "test-ciphertext",
+        "redaction_summary": {"total_matches": 0, "by_type": {}, "policy_version": 1},
+        "image_consent_at": None,
+    }
+    record["review_requested_by"] = record["user_id"]
+    obj._load_confirmed_preview = AsyncMock(return_value=record)
+
+
 @pytest.mark.asyncio
 async def test_visual_pipeline_failure_uses_claim_token_failure_path(monkeypatch):
     from app.pipeline import orchestrator as module
@@ -383,19 +447,25 @@ async def test_visual_pipeline_failure_uses_claim_token_failure_path(monkeypatch
     obj.loader = MagicMock()
     obj.loader.load_rules_and_facts.return_value = ([], [])
     obj.supabase = MagicMock()
+    obj.supabase.get_confidentiality_policy.return_value = None
     obj.supabase._get_client.return_value.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
-        {"visual_guidelines": {}}
+        {"version": 1, "visual_guidelines": {}}
     ]
-    obj._load_visual_asset_ids = AsyncMock(return_value=[uuid4()])
+    asset_id = uuid4()
+    obj._load_visual_asset_ids = AsyncMock(return_value=[asset_id])
+    attach_confirmed_preview_fixture(obj, pipeline_input, asset_id)
     obj._run_deterministic_checks = AsyncMock(return_value=SimpleNamespace())
     obj._convert_deterministic_to_pipeline = MagicMock(return_value=([], []))
     obj._persist_failure = AsyncMock()
     monkeypatch.setattr(module, "run_visual_analysis", AsyncMock(side_effect=RuntimeError("asset download failed")))
 
-    output = await obj.run_pipeline(review_id)
+    with patch("app.confidentiality.preview.decrypt_reverse_map", return_value={}):
+        output = await obj.run_pipeline(review_id)
 
-    assert output.error == "asset download failed"
-    obj._persist_failure.assert_awaited_once_with(review_id, "asset download failed", token)
+    assert output.error == "Review processing failed (RuntimeError)"
+    obj._persist_failure.assert_awaited_once_with(
+        review_id, "Review processing failed (RuntimeError)", token, pipeline_input.preview_id
+    )
 
 
 @pytest.mark.asyncio
@@ -413,17 +483,21 @@ async def test_visual_guidelines_lookup_failure_fails_closed_and_persists_failur
     obj.loader = MagicMock()
     obj.loader.load_rules_and_facts.return_value = ([], [])
     obj.supabase = MagicMock()
+    obj.supabase.get_confidentiality_policy.return_value = None
     obj.supabase._get_client.return_value.table.return_value.select.return_value.eq.return_value.execute.side_effect = RuntimeError(
         "database unavailable"
     )
-    obj._load_visual_asset_ids = AsyncMock(return_value=[uuid4()])
+    asset_id = uuid4()
+    obj._load_visual_asset_ids = AsyncMock(return_value=[asset_id])
+    attach_confirmed_preview_fixture(obj, pipeline_input, asset_id)
     obj._persist_failure = AsyncMock()
 
-    output = await obj.run_pipeline(review_id)
+    with patch("app.confidentiality.preview.decrypt_reverse_map", return_value={}):
+        output = await obj.run_pipeline(review_id)
 
-    assert output.error == "Failed to load visual guidelines for review"
+    assert output.error == "Review processing failed (RuntimeError)"
     obj._persist_failure.assert_awaited_once_with(
-        review_id, "Failed to load visual guidelines for review", token
+        review_id, "Review processing failed (RuntimeError)", token, pipeline_input.preview_id
     )
 
 

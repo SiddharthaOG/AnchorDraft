@@ -173,13 +173,13 @@ class VisualAssetService:
             import imagehash
             metadata.perceptual_hash = str(imagehash.phash(img))
         except Exception as e:
-            logger.warning("perceptual_hash_failed", extra={"error": str(e)})
+            logger.warning("perceptual_hash_failed", extra={"error_type": type(e).__name__})
 
         # Extract dominant colors (simple k-means style using PIL)
         try:
             metadata.dominant_colors = self._extract_dominant_colors(img)
         except Exception as e:
-            logger.warning("dominant_colors_failed", extra={"error": str(e)})
+            logger.warning("dominant_colors_failed", extra={"error_type": type(e).__name__})
 
         return metadata
 

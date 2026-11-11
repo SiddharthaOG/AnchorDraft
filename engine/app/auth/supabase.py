@@ -84,6 +84,18 @@ class SupabaseClient:
         response = query.limit(1).execute()
         return response.data[0] if response.data else None
 
+    def get_confidentiality_policy(self, org_id: str) -> dict | None:
+        """Get the confidentiality policy for exactly one organization."""
+        client = self._get_client()
+        response = (
+            client.table("confidentiality_policies")
+            .select("*")
+            .eq("org_id", org_id)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
     def create_review(
         self,
         org_id: str,

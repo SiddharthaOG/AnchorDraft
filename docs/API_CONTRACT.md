@@ -83,40 +83,42 @@ VERIFY how these exceptions surface in the browser client, then add a small mapp
 
 ## 5. Review service endpoints
 
-### 5.1 `POST /v1/reviews` — start a review
+### 5.1 POST /v1/reviews/preview � prepare a review preview
 
 | | |
 |---|---|
-| Who | a member with the `creator` role |
-| Purpose | review one revision against the active kit |
-| Idempotent | yes (see below) |
+| Who | a member with the creator role |
+| Purpose | construct and display the exact redacted provider request before any provider call |
+| State | creates a short-lived preview record; does not start a review |
 
-**Request**
+Request: { "revision_id": "<uuid>" }.
 
-| Field | Type | Rules |
-|---|---|---|
-| `revision_id` | uuid | required |
+Response 201 includes preview_id, a one-time confirmation_token, expires_at (10 minutes), redacted_draft, exact text and vision prompt previews, attached-image metadata and temporary preview URLs, image_consent_required, redaction counts by type, and payload_sha256. Response headers are Cache-Control: no-store and Pragma: no-cache.
 
-**Checks, in order**
-1. Token valid; revision found; caller is a member and has `creator` (`401`, `404`, `403`).
-2. The revision is the latest revision of its content, and the content status is `draft` or `changes_requested` (`409 not_latest_revision` or `not_editable`).
-3. The organisation has an active kit (`409 no_active_kit`) and the kit fits the prompt cap (`409 kit_too_large`).
-4. Idempotency: if a review for this revision is `queued` or `running`, or the latest one is `done` with `llm_status` of `ok` or `skipped`, return it with `deduplicated: true` and HTTP `200`. A new review is created only if there is none, or the latest one failed or has `llm_status = failed`.
-5. The organisation is under `DAILY_REVIEW_CAP` and the user is under the per-user rate limit (`429` with `retry_after_seconds`). Deduplicated responses do not count against the cap.
+The stored payload contains redacted prompts and metadata only. The placeholder reverse map is encrypted with PREVIEW_ENCRYPTION_KEY; raw source values and image bytes are not stored in the preview row. No provider is called during preview construction.
 
-**Response** — `202` for a new review, `200` when deduplicated.
+### 5.2 POST /v1/reviews/confirm � consume a preview and start a review
 
-| Field | Type | Notes |
-|---|---|---|
-| `review_id` | uuid | |
-| `status` | string | `queued`, `running` or `done` |
-| `deduplicated` | boolean | |
-| `kit_id` | uuid | the kit version this review uses |
-| `kit_version` | int | |
+| | |
+|---|---|
+| Who | the same creator who created the preview |
+| Purpose | atomically consume the preview and enqueue exactly one review |
+| Idempotent | single-use; a replay returns 409 preview_already_consumed |
 
-The service creates the `reviews` row, returns immediately, and runs the pipeline in a background task (stages and the validator are specified in Phase 4).
+Request fields:
+- preview_id (UUID, required)
+- confirmation_token (string, required; returned only by the preview endpoint)
+- consent_to_send_original_images (boolean; must be true when the preview includes a vision-provider request)
 
-### 5.2 `POST /v1/imports/text` — extract text from a file
+Before enqueueing, the service rechecks the caller, token, expiry, payload hash, revision hash/latest status, active-kit fingerprint, confidentiality-policy version and full policy fingerprint (including toggles and normalized custom terms), and visual-asset associations/checksums. The preview is locked and consumed in the same transaction that creates the review and writes the confirmation audit event. The pipeline reuses the frozen provider requests; it does not rebuild them. Attached image bytes are sent in their stored form only after explicit consent and are checksum-verified against the preview.
+
+Response 202 returns the normal review response: review_id, status, deduplicated, kit_id and kit_version.
+
+### 5.3 POST /v1/reviews � legacy direct start (disabled)
+
+Returns 409 preview_required. Direct review creation is intentionally disabled so callers cannot bypass the preview and consent gate.
+
+### 5.4 `POST /v1/imports/text` — extract text from a file
 
 | | |
 |---|---|
@@ -138,7 +140,7 @@ The service creates the `reviews` row, returns immediately, and runs the pipelin
 
 **Errors:** `413 too_large`, `415 unsupported_media_type`, `409 no_extractable_text` (for example a scanned PDF), `422 validation_error`.
 
-### 5.3 `POST /v1/kits/{kit_id}/lint` — check a draft kit
+### 5.5 `POST /v1/kits/{kit_id}/lint` — check a draft kit
 
 | | |
 |---|---|
@@ -156,14 +158,14 @@ The service creates the `reviews` row, returns immediately, and runs the pipelin
 
 **Checks:** deterministic rule `config` is valid; the kit fits the prompt cap; facts past `valid_until`; rules with empty guideline text; a kit with no rules. Activation (`activate_kit`) enforces only structural conditions in the database; the web app runs lint first and shows the result.
 
-### 5.4 `GET /v1/health` — liveness and warm-up
+### 5.6 `GET /v1/health` — liveness and warm-up
 
 Public. Returns `{status: "ok", version, time}`. With `?deep=1` it also reports `{database: true or false}` and never calls the model provider (cost). Deep checks are rate-limited. The web app calls this on load to wake a cold free-tier instance.
 
 ## 6. Review lifecycle
 
 ```
-POST /v1/reviews → reviews.status = queued → running → done | failed
+POST /v1/reviews/preview -> POST /v1/reviews/confirm -> reviews.status = queued -> running -> done | failed
                                        llm_status: ok | skipped | failed
 ```
 
@@ -175,7 +177,7 @@ POST /v1/reviews → reviews.status = queued → running → done | failed
 | Revision could not be loaded or a database error stopped the run | `failed` | `failed` | none | safe error text in `error` |
 
 - **How the browser follows progress:** it reads the `reviews` row through Supabase and subscribes to Realtime changes for that row. If Realtime is unavailable it polls every 3 seconds (ASSUMPTION).
-- **Retry:** call `POST /v1/reviews` again. A new review row is created when the last one failed or has `llm_status = failed`.
+- **Retry:** create a fresh preview and confirm it. Preview tokens are single-use and cannot be replayed.
 - **Timeouts (ASSUMPTIONS):** 90 seconds for the whole review, 45 seconds for the model call, one retry on a transient model error.
 - **Concurrency (ASSUMPTION):** at most 2 simultaneous model calls across the service, FIFO. Extra reviews wait as `queued`. Free-tier model quotas are low (VERIFY), and a quota error is treated like any model failure.
 - **Stuck jobs:** a review in `running` for more than 5 minutes is marked `failed` by the startup sweep and by a lazy check on read.
@@ -216,7 +218,7 @@ All functions are atomic, run as `SECURITY DEFINER`, and follow the hardening ru
   5. Insert the new revision (source `accepted_suggestion`, parent = latest), set `resulting_revision_id` on the applied decisions, and move `changes_requested` to `draft`.
   6. Reject the whole call (`validation:body`) if the new text would exceed the cap.
 - The server builds the new text; the client never sends it, so it cannot be tampered with.
-- The web app then calls `POST /v1/reviews` for the new revision.
+- The web app then creates a fresh preview and confirms it for the new revision.
 
 ### 7.5 `submit_content`
 `submit_content(_content_id uuid) → void`
@@ -313,7 +315,7 @@ Each candidate finding is either **kept** or **dropped** with one reason: `schem
 
 - Authentication: missing, malformed and expired tokens return `401`.
 - Cross-organisation access returns `404`, and a wrong role returns `403`.
-- `POST /v1/reviews`: not-latest revision; content not editable; no active kit; deduplication; cap reached; `llm_status = failed` creates a new review on retry.
+- `POST /v1/reviews/preview` and `POST /v1/reviews/confirm`: revision and kit state are revalidated; retry requires a fresh single-use preview.
 - Partial result: with a fake provider that fails, the review ends `done` with deterministic findings and a warning.
 - Every database function has negative tests for wrong role, wrong organisation and wrong state.
 - `apply_decisions`: several accepted findings, overlapping ranges, text that changed since review, and text containing emoji (code-point offsets).

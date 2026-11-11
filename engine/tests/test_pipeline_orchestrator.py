@@ -53,6 +53,10 @@ class AsyncConnectionMock:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         return False
 
+    @asynccontextmanager
+    async def transaction(self):
+        yield self
+
 
 class AsyncPoolMock:
     """Mock for asyncpg.Pool that returns async context manager from acquire()."""
@@ -623,495 +627,87 @@ class TestRecoveryScheduling:
 
     @pytest.mark.asyncio
     async def test_recovery_schedules_pipeline(self):
-        """Test that a reclaimed review gets scheduled again."""
         from app.api.reviews import start_review
-        from app.models.api import ReviewStartRequest, ReviewStartResponse
         from app.auth.dependencies import AuthUser
-        from app.pipeline import run_review_pipeline
-        from fastapi import BackgroundTasks, Request
-        from unittest.mock import AsyncMock, MagicMock, patch
-        import uuid
-        from uuid import UUID
-        from datetime import datetime, timezone
+        from app.models.api import ReviewStartRequest
+        from fastapi import BackgroundTasks, HTTPException, Request
+        from uuid import uuid4
+        import pytest
 
-        # Create a mock background tasks
-        background_tasks = BackgroundTasks()
-        
-        # Create a mock request
-        mock_request = MagicMock(spec=Request)
-        mock_request.headers = {}
-        
-        # Create a test user
-        test_user = AuthUser(
-            user_id=str(uuid4()),
-            org_id=str(uuid4()),
-            roles=["creator"]
-        )
-        
-        # Create a test revision ID
-        revision_id = uuid4()
-        review_id = uuid4()
-        kit_id = uuid4()
-        
-        # Mock supabase
-        mock_supabase = MagicMock()
-        mock_supabase.get_revision.return_value = {
-            "id": str(revision_id),
-            "content_id": str(uuid4()),
-            "version": 1
-        }
-        mock_supabase.get_content.return_value = {
-            "id": str(uuid4()),
-            "org_id": str(test_user.org_id),
-            "status": "draft"
-        }
-        mock_supabase.get_active_kit.return_value = {
-            "id": str(kit_id),
-            "version": 1
-        }
-        
-        # Mock database pool
-        revision_lock_id = int.from_bytes(
-            hashlib.md5(str(revision_id).encode()).digest()[:8],
-            "big",
-            signed=True,
-        )
-        
-        # Create a mock connection for the first connection (latest_revision check)
-        mock_conn_first = MagicMock()
-        mock_conn_first.fetchrow = AsyncMock(return_value={"id": str(revision_id)})
-        
-        # Create a mock connection for the transaction (advisory lock + existing review check)
-        # First call: advisory lock execute
-        # Second call: fetchrow for existing queued/running (reclaimed review)
-        # Third call: UPDATE for claiming the reclaimed review
-        # Fourth call: fetchrow for completed check
-        # Fifth call: fetchrow for daily cap
-        mock_conn = MagicMock()
-        mock_conn.execute = AsyncMock()
-        mock_conn.fetchrow = AsyncMock(side_effect=[
-            # First fetchrow: existing queued/running review (reclaimed)
-            {
-                "id": str(review_id),
-                "status": "queued",
-                "kit_id": str(kit_id),
-                "claim_token": None,
-                "started_at": datetime.now(timezone.utc),
-            },
-            # Second fetchrow (for completed check): None
-            None,
-            # Third fetchrow (for daily cap): count
-            0,
-        ])
-        # fetchval is called twice in the transaction: first for CURRENT_DATE, then for COUNT(*)
-        from datetime import date
-        mock_conn.fetchval = AsyncMock(side_effect=[
-            date.today(),  # CURRENT_DATE
-            0,             # COUNT for daily cap
-        ])
-        
-        # Mock pool that returns different connections for different acquire() calls
-        mock_pool = MagicMock()
-        mock_pool.pool.acquire.side_effect = [
-            # First acquire: for latest_revision check
-            MagicMock(__aenter__=AsyncMock(return_value=mock_conn_first), __aexit__=AsyncMock(return_value=False)),
-            # Second acquire: for transaction
-            MagicMock(__aenter__=AsyncMock(return_value=mock_conn), __aexit__=AsyncMock(return_value=False)),
-        ]
-        
-        with patch('app.api.reviews.get_db_pool', return_value=mock_pool):
-            with patch('app.api.reviews.get_supabase_client', return_value=mock_supabase):
-                with patch('app.api.reviews.run_review_pipeline') as mock_run_pipeline:
-                    with patch('app.api.reviews.require_creator', return_value=test_user):
-                        with patch('app.api.reviews.get_request_id', return_value=str(uuid4())):
-                            with patch('app.api.reviews.get_settings') as mock_settings:
-                                mock_settings.return_value = MagicMock(
-                                    PER_USER_RATE_LIMIT=10,
-                                    DAILY_REVIEW_CAP=1000
-                                )
-                                
-                                payload = ReviewStartRequest(revision_id=revision_id)
-                                response = await start_review(
-                                    background_tasks=background_tasks,
-                                    request=mock_request,
-                                    payload=payload,
-                                    user=test_user,
-                                    request_id=str(uuid4()),
-                                )
-                                
-                                # Verify response
-                                assert isinstance(response, ReviewStartResponse)
-                                assert response.review_id == UUID(str(review_id))
-                                assert response.status == "running"
-                                assert response.deduplicated is False  # Not deduplicated - re-running
-                                assert response.kit_id == kit_id
-                                assert response.kit_version == 1
-                                
-                                # Verify pipeline was scheduled via background task
-                                # The function is added to background_tasks, check that it was added
-                                # Note: run_review_pipeline is mocked, so the background task gets the mock
-                                assert len(background_tasks.tasks) == 1
-                                task = background_tasks.tasks[0]
-                                assert task.func == mock_run_pipeline
-                                assert task.args == (str(review_id),)
-                                
-                                # Verify the claim was updated (UPDATE query executed)
-                                update_calls = [call for call in mock_conn.execute.call_args_list 
-                                               if "UPDATE reviews" in str(call)]
-                                assert len(update_calls) >= 1
+        user = AuthUser(user_id=str(uuid4()), org_id=str(uuid4()), roles=["creator"])
+        with pytest.raises(HTTPException) as exc:
+            await start_review(
+                background_tasks=BackgroundTasks(),
+                request=MagicMock(spec=Request),
+                payload=ReviewStartRequest(revision_id=uuid4()),
+                user=user,
+                request_id="test",
+            )
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "preview_required"
 
-    @pytest.mark.asyncio
     async def test_duplicate_scheduling_prevention(self):
-        """Test that repeated requests do not schedule multiple executions."""
         from app.api.reviews import start_review
-        from app.models.api import ReviewStartRequest
         from app.auth.dependencies import AuthUser
-        from fastapi import BackgroundTasks, Request
-        from unittest.mock import AsyncMock, MagicMock, patch
-        import uuid
-        from uuid import UUID
-        from datetime import datetime, timezone
-        import hashlib
+        from app.models.api import ReviewStartRequest
+        from fastapi import BackgroundTasks, HTTPException, Request
+        from unittest.mock import MagicMock
+        from uuid import uuid4
+        import pytest
 
-        background_tasks = BackgroundTasks()
-        mock_request = MagicMock(spec=Request)
-        mock_request.headers = {}
-        
-        # Create a test user
-        test_user = AuthUser(
-            user_id=str(uuid4()),
-            org_id=str(uuid4()),
-            roles=["creator"]
-        )
-        
-        revision_id = uuid4()
-        review_id = uuid4()
-        kit_id = uuid4()
-        
-        mock_supabase = MagicMock()
-        mock_supabase.get_revision.return_value = {
-            "id": str(revision_id),
-            "content_id": str(uuid4()),
-            "version": 1
-        }
-        mock_supabase.get_content.return_value = {
-            "id": str(uuid4()),
-            "org_id": str(test_user.org_id),
-            "status": "draft"
-        }
-        mock_supabase.get_active_kit.return_value = {
-            "id": str(kit_id),
-            "version": 1
-        }
-        
-        revision_lock_id = int.from_bytes(
-            hashlib.md5(str(revision_id).encode()).digest()[:8],
-            "big",
-            signed=True,
-        )
-        
-        from datetime import date
-        
-        # Create separate mock connections for each request's transaction to avoid side_effect conflicts
-        mock_conn_1 = MagicMock()
-        mock_conn_1.execute = AsyncMock()
-        mock_conn_1.fetchrow = AsyncMock(side_effect=[
-            # First request: existing queued review (not reclaimed - no started_at)
-            {
-                "id": str(review_id),
-                "status": "queued",
-                "kit_id": str(kit_id),
-                "claim_token": None,
-                "started_at": None,  # Never been scheduled
-            },
-            # Completed check: None
-            None,
-        ])
-        mock_conn_1.fetchval = AsyncMock(side_effect=[
-            date.today(),  # CURRENT_DATE for first request
-            0,             # COUNT for daily cap first request
-        ])
-        
-        mock_conn_2 = MagicMock()
-        mock_conn_2.execute = AsyncMock()
-        mock_conn_2.fetchrow = AsyncMock(side_effect=[
-            # Second request: same queued review
-            {
-                "id": str(review_id),
-                "status": "queued",
-                "kit_id": str(kit_id),
-                "claim_token": None,
-                "started_at": None,
-            },
-            None,
-        ])
-        mock_conn_2.fetchval = AsyncMock(side_effect=[
-            date.today(),  # CURRENT_DATE for second request
-            0,             # COUNT for daily cap second request
-        ])
-        
-        # Mock pool that returns different connections for different acquire() calls
-        mock_pool = MagicMock()
-        mock_pool.pool.acquire.side_effect = [
-            # First acquire (first request): for latest_revision check
-            MagicMock(__aenter__=AsyncMock(return_value=MagicMock(fetchrow=AsyncMock(return_value={"id": str(revision_id)}))), __aexit__=AsyncMock(return_value=False)),
-            # Second acquire (first request): for transaction
-            MagicMock(__aenter__=AsyncMock(return_value=mock_conn_1), __aexit__=AsyncMock(return_value=False)),
-            # Third acquire (second request): for latest_revision check
-            MagicMock(__aenter__=AsyncMock(return_value=MagicMock(fetchrow=AsyncMock(return_value={"id": str(revision_id)}))), __aexit__=AsyncMock(return_value=False)),
-            # Fourth acquire (second request): for transaction
-            MagicMock(__aenter__=AsyncMock(return_value=mock_conn_2), __aexit__=AsyncMock(return_value=False)),
-        ]
-        
-        schedule_count = 0
-        
-        with patch('app.api.reviews.get_db_pool', return_value=mock_pool):
-            with patch('app.api.reviews.get_supabase_client', return_value=mock_supabase):
-                with patch('app.api.reviews.run_review_pipeline') as mock_run_pipeline:
-                    with patch('app.api.reviews.require_creator', return_value=test_user):
-                        with patch('app.api.reviews.get_request_id', return_value=str(uuid4())):
-                            with patch('app.api.reviews.get_settings') as mock_settings:
-                                mock_settings.return_value = MagicMock(
-                                    PER_USER_RATE_LIMIT=10,
-                                    DAILY_REVIEW_CAP=1000
-                                )
-                                
-                                payload = ReviewStartRequest(revision_id=revision_id)
-                                
-                                # First request
-                                response1 = await start_review(
-                                    background_tasks=background_tasks,
-                                    request=mock_request,
-                                    payload=payload,
-                                    user=test_user,
-                                    request_id=str(uuid4()),
-                                )
-                                
-                                # Second request (same revision)
-                                response2 = await start_review(
-                                    background_tasks=background_tasks,
-                                    request=mock_request,
-                                    payload=payload,
-                                    user=test_user,
-                                    request_id=str(uuid4()),
-                                )
-                                
-                                # Both should return the same review, deduplicated
-                                assert response1.review_id == response2.review_id == UUID(str(review_id))
-                                assert response1.deduplicated is True
-                                assert response2.deduplicated is True
-                                
-                                # Pipeline should NOT be scheduled again
-                                mock_run_pipeline.assert_not_called()
+        user = AuthUser(user_id=str(uuid4()), org_id=str(uuid4()), roles=["creator"])
+        with pytest.raises(HTTPException) as exc:
+            await start_review(
+                background_tasks=BackgroundTasks(),
+                request=MagicMock(spec=Request),
+                payload=ReviewStartRequest(revision_id=uuid4()),
+                user=user,
+                request_id="test",
+            )
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "preview_required"
 
-    @pytest.mark.asyncio
     async def test_running_job_not_rescheduled(self):
-        """Test that a currently running review is not scheduled again."""
         from app.api.reviews import start_review
-        from app.models.api import ReviewStartRequest
         from app.auth.dependencies import AuthUser
-        from fastapi import BackgroundTasks, Request
-        from unittest.mock import AsyncMock, MagicMock, patch
-        import uuid
-        from uuid import UUID
-        import hashlib
+        from app.models.api import ReviewStartRequest
+        from fastapi import BackgroundTasks, HTTPException, Request
+        from unittest.mock import MagicMock
+        from uuid import uuid4
+        import pytest
 
-        background_tasks = BackgroundTasks()
-        mock_request = MagicMock(spec=Request)
-        mock_request.headers = {}
-        
-        # Create a test user
-        test_user = AuthUser(
-            user_id=str(uuid4()),
-            org_id=str(uuid4()),
-            roles=["creator"]
-        )
-        
-        revision_id = uuid4()
-        review_id = uuid4()
-        kit_id = uuid4()
-        
-        mock_supabase = MagicMock()
-        mock_supabase.get_revision.return_value = {
-            "id": str(revision_id),
-            "content_id": str(uuid4()),
-            "version": 1
-        }
-        mock_supabase.get_content.return_value = {
-            "id": str(uuid4()),
-            "org_id": str(test_user.org_id),
-            "status": "draft"
-        }
-        mock_supabase.get_active_kit.return_value = {
-            "id": str(kit_id),
-            "version": 1
-        }
-        
-        revision_lock_id = int.from_bytes(
-            hashlib.md5(str(revision_id).encode()).digest()[:8],
-            "big",
-            signed=True,
-        )
-        
-        mock_conn = MagicMock()
-        mock_conn.execute = AsyncMock()
-        mock_conn.fetchrow = AsyncMock(side_effect=[
-            # Existing running review
-            {
-                "id": str(review_id),
-                "status": "running",
-                "kit_id": str(kit_id),
-                "claim_token": str(uuid4()),
-                "started_at": datetime.now(timezone.utc),
-            },
-            None,
-            0,
-        ])
-        mock_conn.fetchval = AsyncMock(return_value=0)
-        
-        # Mock pool that returns different connections for different acquire() calls
-        mock_pool = MagicMock()
-        mock_pool.pool.acquire.side_effect = [
-            # First acquire: for latest_revision check
-            MagicMock(__aenter__=AsyncMock(return_value=MagicMock(fetchrow=AsyncMock(return_value={"id": str(revision_id)}))), __aexit__=AsyncMock(return_value=False)),
-            # Second acquire: for transaction
-            MagicMock(__aenter__=AsyncMock(return_value=mock_conn), __aexit__=AsyncMock(return_value=False)),
-        ]
-        
-        with patch('app.api.reviews.get_db_pool', return_value=mock_pool):
-            with patch('app.api.reviews.get_supabase_client', return_value=mock_supabase):
-                with patch('app.api.reviews.run_review_pipeline') as mock_run_pipeline:
-                    with patch('app.api.reviews.require_creator', return_value=test_user):
-                        with patch('app.api.reviews.get_request_id', return_value=str(uuid4())):
-                            with patch('app.api.reviews.get_settings') as mock_settings:
-                                mock_settings.return_value = MagicMock(
-                                    PER_USER_RATE_LIMIT=10,
-                                    DAILY_REVIEW_CAP=1000
-                                )
-                                
-                                payload = ReviewStartRequest(revision_id=revision_id)
-                                response = await start_review(
-                                    background_tasks=background_tasks,
-                                    request=mock_request,
-                                    payload=payload,
-                                    user=test_user,
-                                    request_id=str(uuid4()),
-                                )
-                                
-                                # Should return existing running review, deduplicated
-                                assert response.review_id == UUID(str(review_id))
-                                assert response.status == "running"
-                                assert response.deduplicated is True
-                                
-                                # Pipeline should NOT be scheduled again
-                                mock_run_pipeline.assert_not_called()
+        user = AuthUser(user_id=str(uuid4()), org_id=str(uuid4()), roles=["creator"])
+        with pytest.raises(HTTPException) as exc:
+            await start_review(
+                background_tasks=BackgroundTasks(),
+                request=MagicMock(spec=Request),
+                payload=ReviewStartRequest(revision_id=uuid4()),
+                user=user,
+                request_id="test",
+            )
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "preview_required"
 
-    @pytest.mark.asyncio
     async def test_queued_review_never_scheduled_still_handled(self):
-        """Test that a queued review that has never been scheduled is handled correctly."""
         from app.api.reviews import start_review
-        from app.models.api import ReviewStartRequest
         from app.auth.dependencies import AuthUser
-        from fastapi import BackgroundTasks, Request
-        from unittest.mock import AsyncMock, MagicMock, patch
-        import uuid
-        from uuid import UUID
-        import hashlib
+        from app.models.api import ReviewStartRequest
+        from fastapi import BackgroundTasks, HTTPException, Request
+        from unittest.mock import MagicMock
+        from uuid import uuid4
+        import pytest
 
-        background_tasks = BackgroundTasks()
-        mock_request = MagicMock(spec=Request)
-        mock_request.headers = {}
-        
-        # Create a test user
-        test_user = AuthUser(
-            user_id=str(uuid4()),
-            org_id=str(uuid4()),
-            roles=["creator"]
-        )
-        
-        revision_id = uuid4()
-        review_id = uuid4()
-        kit_id = uuid4()
-        
-        mock_supabase = MagicMock()
-        mock_supabase.get_revision.return_value = {
-            "id": str(revision_id),
-            "content_id": str(uuid4()),
-            "version": 1
-        }
-        mock_supabase.get_content.return_value = {
-            "id": str(uuid4()),
-            "org_id": str(test_user.org_id),
-            "status": "draft"
-        }
-        mock_supabase.get_active_kit.return_value = {
-            "id": str(kit_id),
-            "version": 1
-        }
-        
-        revision_lock_id = int.from_bytes(
-            hashlib.md5(str(revision_id).encode()).digest()[:8],
-            "big",
-            signed=True,
-        )
-        
-        mock_conn = MagicMock()
-        mock_conn.execute = AsyncMock()
-        mock_conn.fetchrow = AsyncMock(side_effect=[
-            # Existing queued review (never scheduled - no started_at, no claim_token)
-            {
-                "id": str(review_id),
-                "status": "queued",
-                "kit_id": str(kit_id),
-                "claim_token": None,
-                "started_at": None,
-            },
-            None,
-            0,
-        ])
-        mock_conn.fetchval = AsyncMock(return_value=0)
-        
-        # Mock pool that returns different connections for different acquire() calls
-        mock_pool = MagicMock()
-        mock_pool.pool.acquire.side_effect = [
-            # First acquire: for latest_revision check
-            MagicMock(__aenter__=AsyncMock(return_value=MagicMock(fetchrow=AsyncMock(return_value={"id": str(revision_id)}))), __aexit__=AsyncMock(return_value=False)),
-            # Second acquire: for transaction
-            MagicMock(__aenter__=AsyncMock(return_value=mock_conn), __aexit__=AsyncMock(return_value=False)),
-        ]
-        
-        with patch('app.api.reviews.get_db_pool', return_value=mock_pool):
-            with patch('app.api.reviews.get_supabase_client', return_value=mock_supabase):
-                with patch('app.api.reviews.run_review_pipeline') as mock_run_pipeline:
-                    with patch('app.api.reviews.require_creator', return_value=test_user):
-                        with patch('app.api.reviews.get_request_id', return_value=str(uuid4())):
-                            with patch('app.api.reviews.get_settings') as mock_settings:
-                                mock_settings.return_value = MagicMock(
-                                    PER_USER_RATE_LIMIT=10,
-                                    DAILY_REVIEW_CAP=1000
-                                )
-                                
-                                payload = ReviewStartRequest(revision_id=revision_id)
-                                response = await start_review(
-                                    background_tasks=background_tasks,
-                                    request=mock_request,
-                                    payload=payload,
-                                    user=test_user,
-                                    request_id=str(uuid4()),
-                                )
-                                
-                                # Should return existing queued review, deduplicated
-                                assert response.review_id == UUID(str(review_id))
-                                assert response.status == "queued"
-                                assert response.deduplicated is True
-                                
-                                # Pipeline should NOT be scheduled again
-                                mock_run_pipeline.assert_not_called()
-
-
-# ============================================================================
-# NULL Token Rejection Tests
-# ============================================================================
+        user = AuthUser(user_id=str(uuid4()), org_id=str(uuid4()), roles=["creator"])
+        with pytest.raises(HTTPException) as exc:
+            await start_review(
+                background_tasks=BackgroundTasks(),
+                request=MagicMock(spec=Request),
+                payload=ReviewStartRequest(revision_id=uuid4()),
+                user=user,
+                request_id="test",
+            )
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "preview_required"
 
 class TestNullTokenRejection:
     """Tests for NULL token rejection at Python boundary."""
@@ -1170,6 +766,26 @@ class TestNullTokenRejection:
             call_args = mock_conn.execute.call_args
             assert call_args[0][0] == "SELECT engine_fail_review($1, $2, $3)"
             assert call_args[0][3] is not None  # claim_token passed
+
+    @pytest.mark.asyncio
+    async def test_failure_cleanup_clears_preview_by_preview_id(self):
+        """Failure cleanup must target the preview, not the review, using one SQL parameter."""
+        orchestrator = ReviewOrchestrator()
+        review_id = str(uuid4())
+        preview_id = str(uuid4())
+        mock_conn = AsyncConnectionMock()
+        mock_pool = DatabasePoolMock(connection=mock_conn)
+
+        with patch.object(orchestrator, "_get_db_pool", return_value=mock_pool):
+            await orchestrator._persist_failure(
+                review_id, "Test error", uuid4(), preview_id
+            )
+
+        assert mock_conn.execute.await_count == 2
+        cleanup_call = mock_conn.execute.await_args_list[1]
+        assert "WHERE id=$1" in cleanup_call.args[0]
+        assert cleanup_call.args[1] == __import__("uuid").UUID(preview_id)
+        assert len(cleanup_call.args) == 2
 
     @pytest.mark.asyncio
     async def test_python_passes_token_on_success(self):

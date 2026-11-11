@@ -20,6 +20,79 @@ from app.models.pipeline import (
 from app.checks.deterministic import DeterministicCheckResult, SkippedCheck
 
 
+
+def configure_confirmed_preview(orchestrator, pipeline_input, rules, facts):
+    """Build a consistent frozen-preview fixture for pipeline tests."""
+    from dataclasses import asdict
+    from app.confidentiality.preview import sha256_json, sha256_text
+    from app.confidentiality.preview import confidentiality_policy_sha256
+    from app.confidentiality.models import ConfidentialityPolicy
+    from uuid import UUID
+    from app.models.pipeline import ProviderRequest
+    from unittest.mock import AsyncMock, MagicMock
+    import uuid
+
+    pipeline_input.preview_id = str(uuid.uuid4())
+    redacted_rules = [asdict(item) for item in rules]
+    redacted_facts = [
+        {**asdict(item), "valid_until": item.valid_until.isoformat() if item.valid_until else None}
+        for item in facts
+    ]
+    payload = {
+        "text_provider_request": ProviderRequest(
+            system_instruction="system", user_content="redacted request",
+            output_schema={}, randomness=0.1, output_limit=100, timeout_seconds=1,
+        ).model_dump(mode="json"),
+        "vision_provider_request": None,
+        "redacted_fields": {
+            "draft_text": pipeline_input.revision_text,
+            "purpose": pipeline_input.purpose,
+            "channel": pipeline_input.channel,
+        },
+        "redacted_rules": redacted_rules,
+        "redacted_facts": redacted_facts,
+        "asset_manifest": [],
+        "redacted_visual_guidelines": {},
+        "has_visual_provider_request": False,
+    }
+    fingerprint = {
+        "kit_id": str(pipeline_input.kit_id), "version": 1,
+        "rules": redacted_rules, "facts": redacted_facts, "visual_guidelines": {},
+    }
+    record = {
+        "org_id": str(pipeline_input.org_id),
+        "user_id": str(uuid.uuid4()),
+        "review_requested_by": None,
+        "revision_id": str(pipeline_input.revision_id),
+        "kit_id": str(pipeline_input.kit_id),
+        "payload": payload,
+        "asset_manifest": [],
+        "payload_sha256": sha256_json(payload),
+        "revision_sha256": sha256_text(pipeline_input.revision_text),
+        "kit_sha256": sha256_json(fingerprint),
+        "policy_version": 1,
+        "policy_sha256": confidentiality_policy_sha256(
+            ConfidentialityPolicy(org_id=UUID(str(pipeline_input.org_id)))
+        ),
+        "reverse_map_ciphertext": "test-encrypted-map",
+        "redaction_summary": {
+            "total_matches": 0, "by_type": {},
+            "original_chars": len(pipeline_input.revision_text),
+            "redacted_chars": len(pipeline_input.revision_text),
+            "policy_version": 1,
+        },
+        "image_consent_at": None,
+    }
+    record["review_requested_by"] = record["user_id"]
+    orchestrator._load_confirmed_preview = AsyncMock(return_value=record)
+    orchestrator._load_visual_asset_ids = AsyncMock(return_value=[])
+    fake_client = MagicMock()
+    fake_client.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
+        {"version": 1, "visual_guidelines": {}}
+    ]
+    orchestrator.supabase._get_client = MagicMock(return_value=fake_client)
+
+
 class TestF06ModelOfferedFacts:
     """Tests for F06: model_offered_facts passed correctly to validator."""
 
@@ -27,6 +100,7 @@ class TestF06ModelOfferedFacts:
     def orchestrator(self):
         """Create an orchestrator with mocked dependencies."""
         orch = ReviewOrchestrator()
+        orch.supabase.get_confidentiality_policy = MagicMock(return_value=None)
         # Mock the internal methods
         orch._claim_review = AsyncMock(return_value=(True, uuid4()))
         orch._load_review_data = AsyncMock()
@@ -52,6 +126,7 @@ class TestF06ModelOfferedFacts:
             purpose="marketing",
             channel="web",
             engine_version="0.1.0",
+            preview_id=str(uuid4()),
         )
 
     @pytest.fixture
@@ -129,6 +204,7 @@ class TestF06ModelOfferedFacts:
     async def test_validator_receives_model_offered_facts(self, orchestrator, pipeline_input, rules_and_facts):
         """Test that _run_validation is called with the correct model_offered_facts."""
         rules, facts = rules_and_facts
+        configure_confirmed_preview(orchestrator, pipeline_input, rules, facts)
         
         # Setup mocks
         orchestrator._load_review_data.return_value = pipeline_input
@@ -166,8 +242,9 @@ class TestF06ModelOfferedFacts:
         mock_validation_result.validated_findings = []
         orchestrator._run_validation.return_value = mock_validation_result
         
-        # Run the pipeline
-        await orchestrator.run_pipeline(pipeline_input.review_id)
+        # Run with a mocked decryptor for the encrypted preview mapping.
+        with patch("app.confidentiality.preview.decrypt_reverse_map", return_value={}):
+            await orchestrator.run_pipeline(pipeline_input.review_id)
         
         # Verify _run_validation was called with correct model_offered_facts
         call_args = orchestrator._run_validation.call_args
@@ -185,6 +262,7 @@ class TestF06ModelOfferedFacts:
     async def test_unoffered_fact_rejected_by_validator(self, orchestrator, pipeline_input, rules_and_facts):
         """Test that a finding referencing an unoffered fact is rejected."""
         rules, facts = rules_and_facts
+        configure_confirmed_preview(orchestrator, pipeline_input, rules, facts)
         
         orchestrator._load_review_data.return_value = pipeline_input
         orchestrator.loader.load_rules_and_facts.return_value = (rules, facts)
@@ -223,7 +301,8 @@ class TestF06ModelOfferedFacts:
             )
         orchestrator._run_validation.side_effect = mock_validation
         
-        await orchestrator.run_pipeline(pipeline_input.review_id)
+        with patch("app.confidentiality.preview.decrypt_reverse_map", return_value={}):
+            await orchestrator.run_pipeline(pipeline_input.review_id)
         
         # Verify the validation was called with correct offered facts
         call_args = orchestrator._run_validation.call_args
@@ -234,6 +313,7 @@ class TestF06ModelOfferedFacts:
     async def test_offered_fact_accepted_by_validator(self, orchestrator, pipeline_input, rules_and_facts):
         """Test that a finding referencing an offered fact is accepted."""
         rules, facts = rules_and_facts
+        configure_confirmed_preview(orchestrator, pipeline_input, rules, facts)
         
         orchestrator._load_review_data.return_value = pipeline_input
         orchestrator.loader.load_rules_and_facts.return_value = (rules, facts)
@@ -269,7 +349,8 @@ class TestF06ModelOfferedFacts:
         mock_validation_result.validated_findings = []
         orchestrator._run_validation.return_value = mock_validation_result
         
-        await orchestrator.run_pipeline(pipeline_input.review_id)
+        with patch("app.confidentiality.preview.decrypt_reverse_map", return_value={}):
+            await orchestrator.run_pipeline(pipeline_input.review_id)
         
         # Verify the validation was called with correct offered facts
         call_args = orchestrator._run_validation.call_args

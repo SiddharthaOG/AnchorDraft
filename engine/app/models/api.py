@@ -51,6 +51,33 @@ class HealthResponse(BaseModel):
 
 
 # Review endpoints
+class ReviewPreviewRequest(BaseModel):
+    """Create a redacted, short-lived review preview."""
+    revision_id: UUID
+
+
+class ReviewPreviewResponse(BaseModel):
+    """Redacted provider payload and explicit image-consent requirements."""
+    preview_id: UUID
+    revision_id: UUID
+    confirmation_token: str
+    expires_at: datetime
+    redacted_draft: str
+    text_provider_preview: dict
+    vision_provider_preview: Optional[dict] = None
+    assets: List[dict] = Field(default_factory=list)
+    image_consent_required: bool = False
+    redaction_summary: dict
+    payload_sha256: str
+
+
+class ReviewConfirmRequest(BaseModel):
+    """Confirm one exact preview; image consent is explicit and required when images exist."""
+    preview_id: UUID
+    confirmation_token: str = Field(min_length=32, max_length=256)
+    consent_to_send_original_images: bool = False
+
+
 class ReviewStartRequest(BaseModel):
     """Request to start a review."""
     revision_id: UUID

@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     # Database configuration
     DATABASE_URL: str = ""
 
+    # Required for encrypting short-lived preview placeholder maps.
+    PREVIEW_ENCRYPTION_KEY: str = ""
+
     # Rate limits and caps
     DAILY_REVIEW_CAP: int = 20
     PER_USER_RATE_LIMIT: int = 10

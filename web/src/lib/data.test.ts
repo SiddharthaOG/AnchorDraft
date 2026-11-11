@@ -69,7 +69,8 @@ const {
   cloneKit,
   activateKit,
   lintKit,
-  startReview,
+  createReviewPreview,
+  confirmReviewPreview,
   createRule,
   updateRule,
   deleteRule,
@@ -919,8 +920,27 @@ describe('Mutation/Lint Race Protection Logic', () => {
   });
 });
 
-describe('startReview', () => {
-  const mockStartReviewResponse = {
+describe('review preview and confirmation API', () => {
+  const previewResponse = {
+    preview_id: 'preview-1',
+    revision_id: 'revision-1',
+    confirmation_token: 'one-time-token',
+    expires_at: '2026-11-11T12:10:00Z',
+    redacted_draft: 'Contact [EMAIL-12345678]',
+    text_provider_preview: { system_instruction: 'system', user_content: 'redacted prompt' },
+    vision_provider_preview: null,
+    assets: [],
+    image_consent_required: false,
+    redaction_summary: {
+      total_matches: 1,
+      by_type: { EMAIL: 1 },
+      original_chars: 30,
+      redacted_chars: 25,
+      policy_version: 1,
+    },
+    payload_sha256: 'a'.repeat(64),
+  };
+  const confirmResponse = {
     review_id: 'review-1',
     status: 'queued' as const,
     deduplicated: false,
@@ -932,190 +952,99 @@ describe('startReview', () => {
     mockAuthGetSession.mockResolvedValue({ data: { session: { access_token: 'test-token' } }, error: null });
   });
 
-  it('calls start review endpoint with auth token and returns parsed response', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => mockStartReviewResponse,
-    });
-
-    const result = await startReview('revision-1');
+  it('creates a preview with the authenticated, no-store request', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => previewResponse });
+    const result = await createReviewPreview('revision-1');
 
     expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining('/v1/reviews'),
+      expect.stringContaining('/v1/reviews/preview'),
       expect.objectContaining({
         method: 'POST',
-        headers: expect.objectContaining({
-          Authorization: 'Bearer test-token',
-          'Content-Type': 'application/json',
-        }),
+        cache: 'no-store',
+        headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
         body: JSON.stringify({ revision_id: 'revision-1' }),
-      })
-    );
-    expect(result).toEqual(mockStartReviewResponse);
-  });
-
-  it('throws ReviewEngineError on 401', async () => {
-    mockAuthGetSession.mockResolvedValueOnce({
-      data: { session: null },
-      error: null,
-    });
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 401 });
-  });
-
-  it('preserves FastAPI nested authentication errors on 401', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 401,
-      statusText: 'Unauthorized',
-      json: async () => ({
-        detail: {
-          error: {
-            code: 'unauthenticated',
-            message: 'Invalid token: Signature verification failed',
-          },
-        },
       }),
-    });
+    );
+    expect(result).toEqual(previewResponse);
+  });
 
-    await expect(startReview('revision-1')).rejects.toMatchObject({
+  it('confirms a preview with explicit image consent', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => confirmResponse });
+    const result = await confirmReviewPreview('preview-1', 'one-time-token', true);
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/v1/reviews/confirm'),
+      expect.objectContaining({
+        method: 'POST',
+        cache: 'no-store',
+        body: JSON.stringify({
+          preview_id: 'preview-1',
+          confirmation_token: 'one-time-token',
+          consent_to_send_original_images: true,
+        }),
+      }),
+    );
+    expect(result).toEqual(confirmResponse);
+  });
+
+  it('rejects when there is no authenticated session', async () => {
+    mockAuthGetSession.mockResolvedValueOnce({ data: { session: null }, error: null });
+    await expect(createReviewPreview('revision-1')).rejects.toMatchObject({
       name: 'ReviewEngineError',
       status: 401,
-      message: 'Invalid token: Signature verification failed',
     });
   });
 
-  it('throws ReviewEngineError on 403', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 403,
-      json: async () => ({ error: { message: 'Forbidden' } }),
-    });
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 403 });
-  });
-
-  it('throws ReviewEngineError on 404', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 404,
-      json: async () => ({ error: { message: 'Revision not found' } }),
-    });
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 404 });
-  });
-
-  it('throws ReviewEngineError on 409 conflict', async () => {
+  it('preserves structured preview errors and machine-readable reason codes', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 409,
-      json: async () => ({ error: { message: 'Content is not editable', reason: 'not_editable' } }),
+      statusText: 'Conflict',
+      json: async () => ({ detail: { code: 'preview_expired', message: 'Preview expired' } }),
     });
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 409, reason: 'not_editable' });
+    await expect(confirmReviewPreview('preview-1', 'token', false)).rejects.toMatchObject({
+      name: 'ReviewEngineError',
+      status: 409,
+      message: 'Preview expired',
+      reason: 'preview_expired',
+    });
   });
 
-  it('throws ReviewEngineError on 429 rate limited', async () => {
+  it('parses plain FastAPI detail strings', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
-      status: 429,
-      json: async () => ({ error: { message: 'Daily review cap reached', retry_after_seconds: 3600 } }),
+      status: 400,
+      statusText: 'Bad Request',
+      json: async () => ({ detail: 'Explicit consent is required' }),
     });
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 429, retryAfterSeconds: 3600 });
+    await expect(confirmReviewPreview('preview-1', 'token', false)).rejects.toMatchObject({
+      status: 400,
+      message: 'Explicit consent is required',
+    });
   });
 
-  it('throws ReviewEngineError on network error', async () => {
+  it('converts network errors into ReviewEngineError', async () => {
     mockFetch.mockRejectedValueOnce(new Error('Network error'));
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 0 });
-  });
-
-  it('throws ReviewEngineError on timeout', async () => {
-    const abortError = new DOMException('Aborted', 'AbortError');
-    mockFetch.mockRejectedValueOnce(abortError);
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 504 });
-  });
-
-  it('throws ReviewEngineError on invalid response shape', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ invalid: 'shape' }),
+    await expect(createReviewPreview('revision-1')).rejects.toMatchObject({
+      name: 'ReviewEngineError',
+      status: 0,
     });
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 500 });
   });
 
-  it('handles deduplicated response', async () => {
-    const deduplicatedResponse = {
-      ...mockStartReviewResponse,
-      deduplicated: true,
-      status: 'done' as const,
-    };
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => deduplicatedResponse,
+  it('converts aborts into timeout errors', async () => {
+    mockFetch.mockRejectedValueOnce(new DOMException('Aborted', 'AbortError'));
+    await expect(createReviewPreview('revision-1')).rejects.toMatchObject({
+      name: 'ReviewEngineError',
+      status: 504,
     });
+  });
 
-    const result = await startReview('revision-1');
-    expect(result).toEqual(deduplicatedResponse);
+  it('rejects malformed preview responses', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ preview_id: 'bad' }) });
+    await expect(createReviewPreview('revision-1')).rejects.toMatchObject({
+      name: 'ReviewEngineError',
+      status: 500,
+    });
   });
 });
 

@@ -789,16 +789,46 @@ export async function activateKit(kitId: string): Promise<void> {
 // Review engine API client
 // ============================================================
 
-export interface StartReviewRequest {
-  revision_id: string;
-}
-
 export interface StartReviewResponse {
   review_id: string;
   status: 'queued' | 'running' | 'done' | 'failed';
   deduplicated: boolean;
   kit_id: string;
   kit_version: number;
+}
+
+export interface ReviewPreviewAsset {
+  id: string;
+  checksum: string;
+  mime_type: string;
+  width: number;
+  height: number;
+  preview_url?: string | null;
+}
+
+export interface ProviderPromptPreview {
+  system_instruction: string;
+  user_content: string;
+}
+
+export interface ReviewPreviewResponse {
+  preview_id: string;
+  revision_id: string;
+  confirmation_token: string;
+  expires_at: string;
+  redacted_draft: string;
+  text_provider_preview: ProviderPromptPreview;
+  vision_provider_preview: ProviderPromptPreview | null;
+  assets: ReviewPreviewAsset[];
+  image_consent_required: boolean;
+  redaction_summary: {
+    total_matches: number;
+    by_type: Record<string, number>;
+    original_chars: number;
+    redacted_chars: number;
+    policy_version: number;
+  };
+  payload_sha256: string;
 }
 
 export class ReviewEngineError extends Error {
@@ -821,8 +851,9 @@ function getApiErrorDetails(payload: unknown): {
 } {
   if (!payload || typeof payload !== 'object') return {};
   const body = payload as Record<string, unknown>;
-  const detail = body.detail && typeof body.detail === 'object'
-    ? body.detail as Record<string, unknown>
+  const rawDetail = body.detail;
+  const detail = rawDetail && typeof rawDetail === 'object'
+    ? rawDetail as Record<string, unknown>
     : undefined;
   const nestedError = detail?.error && typeof detail.error === 'object'
     ? detail.error as Record<string, unknown>
@@ -831,37 +862,41 @@ function getApiErrorDetails(payload: unknown): {
     ? body.error as Record<string, unknown>
     : undefined;
   const apiError = nestedError || topLevelError;
-  const rawMessage = apiError?.message ?? (typeof detail === 'string' ? detail : undefined);
-  const rawRetryAfter = apiError?.retry_after_seconds;
+  const rawMessage = apiError?.message
+    ?? (typeof rawDetail === 'string' ? rawDetail : undefined)
+    ?? (typeof detail?.message === 'string' ? detail.message : undefined);
+  const rawRetryAfter = apiError?.retry_after_seconds ?? detail?.retry_after_seconds;
+  const rawReason = apiError?.reason ?? detail?.code;
 
   return {
     message: typeof rawMessage === 'string' ? rawMessage : undefined,
-    reason: typeof apiError?.reason === 'string' ? apiError.reason : undefined,
+    reason: typeof rawReason === 'string' ? rawReason : undefined,
     retryAfterSeconds: typeof rawRetryAfter === 'number' ? rawRetryAfter : undefined,
   };
 }
 
-export async function startReview(revisionId: string): Promise<StartReviewResponse> {
+async function postReviewApi<T>(path: string, body: Record<string, unknown>, validate: (data: unknown) => data is T): Promise<T> {
   const token = await getAuthToken();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 90000);
 
   try {
-    const response = await fetch(`${getEngineUrl()}/v1/reviews`, {
+    const response = await fetch(getEngineUrl() + path, {
       method: 'POST',
       signal: controller.signal,
+      cache: 'no-store',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        Authorization: 'Bearer ' + token,
         'Content-Type': 'application/json',
         'X-Request-Id': crypto.randomUUID(),
       },
-      body: JSON.stringify({ revision_id: revisionId }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const apiError = getApiErrorDetails(errorData);
-      const message = apiError.message || `Review start failed: ${response.status} ${response.statusText}`;
+      const message = apiError.message || ('Review request failed: ' + response.status + ' ' + response.statusText);
       throw new ReviewEngineError(
         message,
         response.status,
@@ -871,18 +906,15 @@ export async function startReview(revisionId: string): Promise<StartReviewRespon
       );
     }
 
-    const data = (await response.json()) as StartReviewResponse;
-
-    // Validate response shape
-    if (!data.review_id || !data.status || typeof data.deduplicated !== 'boolean' || !data.kit_id || typeof data.kit_version !== 'number') {
-      throw new ReviewEngineError('Invalid review start response shape', 500);
+    const data: unknown = await response.json();
+    if (!validate(data)) {
+      throw new ReviewEngineError('Invalid review API response shape', 500);
     }
-
     return data;
   } catch (err) {
     if (err instanceof ReviewEngineError) throw err;
     if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new ReviewEngineError('Review start timeout after 90s', 504, err);
+      throw new ReviewEngineError('Review request timeout after 90s', 504, err);
     }
     throw new ReviewEngineError(
       err instanceof Error ? err.message : 'Network error',
@@ -892,6 +924,55 @@ export async function startReview(revisionId: string): Promise<StartReviewRespon
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function isReviewPreviewResponse(data: unknown): data is ReviewPreviewResponse {
+  if (!data || typeof data !== 'object') return false;
+  const value = data as Record<string, unknown>;
+  return typeof value.preview_id === 'string'
+    && typeof value.revision_id === 'string'
+    && typeof value.confirmation_token === 'string'
+    && typeof value.expires_at === 'string'
+    && typeof value.redacted_draft === 'string'
+    && typeof value.image_consent_required === 'boolean'
+    && typeof value.payload_sha256 === 'string'
+    && Array.isArray(value.assets)
+    && !!value.text_provider_preview
+    && typeof value.text_provider_preview === 'object';
+}
+
+function isStartReviewResponse(data: unknown): data is StartReviewResponse {
+  if (!data || typeof data !== 'object') return false;
+  const value = data as Record<string, unknown>;
+  return typeof value.review_id === 'string'
+    && typeof value.status === 'string'
+    && typeof value.deduplicated === 'boolean'
+    && typeof value.kit_id === 'string'
+    && typeof value.kit_version === 'number';
+}
+
+export async function createReviewPreview(revisionId: string): Promise<ReviewPreviewResponse> {
+  return postReviewApi(
+    '/v1/reviews/preview',
+    { revision_id: revisionId },
+    isReviewPreviewResponse,
+  );
+}
+
+export async function confirmReviewPreview(
+  previewId: string,
+  confirmationToken: string,
+  consentToSendOriginalImages: boolean,
+): Promise<StartReviewResponse> {
+  return postReviewApi(
+    '/v1/reviews/confirm',
+    {
+      preview_id: previewId,
+      confirmation_token: confirmationToken,
+      consent_to_send_original_images: consentToSendOriginalImages,
+    },
+    isStartReviewResponse,
+  );
 }
 
 // Shared auth token getter for engine API calls
