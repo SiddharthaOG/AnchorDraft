@@ -212,24 +212,14 @@ async def import_visual(
     clean_bytes = asset_service.strip_exif(file_bytes, content_type)
     metadata = asset_service.extract_extended_metadata(clean_bytes, content_type)
 
-    # Upload to storage, create asset record, and link - all with cleanup on failure
+    # Upload to storage and create asset record in one atomic operation
     try:
-        # Upload to storage
-        storage_path, metadata = asset_service.upload_asset(
+        storage_path, metadata, asset_record = asset_service.upload_asset(
             org_id=user.org_id,
             user_id=user.user_id,
             file_bytes=clean_bytes,
             mime_type=content_type,
             filename=file.filename or "image",
-        )
-
-        # Create asset record in database
-        asset_record = asset_service.create_asset_record(
-            org_id=user.org_id,
-            user_id=user.user_id,
-            storage_path=storage_path,
-            mime_type=content_type,
-            metadata=metadata,
         )
 
         if not asset_record:

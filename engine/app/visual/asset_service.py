@@ -236,12 +236,12 @@ class VisualAssetService:
         file_bytes: bytes,
         mime_type: str,
         filename: str,
-    ) -> tuple[str, VisualAssetMetadata]:
+    ) -> tuple[str, VisualAssetMetadata, dict]:
         """
         Upload a visual asset to Supabase Storage with cleanup on failure.
 
         Returns:
-            Tuple of (storage_path, metadata).
+            Tuple of (storage_path, metadata, asset_record).
         """
         client = self._get_client()
 
@@ -279,7 +279,7 @@ class VisualAssetService:
                     # Try to get existing asset
                     existing = self.get_asset_by_checksum(org_id, metadata.checksum)
                     if existing:
-                        return existing.storage_path, metadata
+                        return existing.storage_path, metadata, existing
                 raise RuntimeError(f"Failed to upload to storage: {e}")
 
             # Create asset record in database
@@ -296,7 +296,7 @@ class VisualAssetService:
 
             created_asset_record = True
 
-            return storage_path, metadata
+            return storage_path, metadata, asset_record
 
         except Exception:
             # Cleanup on failure

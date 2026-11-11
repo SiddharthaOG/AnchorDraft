@@ -88,6 +88,50 @@ class VisualAnalyzer:
             # Don't silently return empty list on failure - propagate the error
             raise
 
+    async def load_asset_bytes(self, asset_id: UUID) -> tuple[bytes, str, VisualAssetMetadata]:
+        """Load asset bytes and metadata from storage.
+
+        Args:
+            asset_id: UUID of the visual asset to load.
+
+        Returns:
+            Tuple of (file_bytes, mime_type, metadata).
+
+        Raises:
+            ValueError: If asset not found or access denied.
+            RuntimeError: If storage download fails.
+        """
+        asset_record = self.supabase.get_visual_asset(str(asset_id))
+        if not asset_record:
+            raise ValueError(f"Visual asset {asset_id} not found")
+
+        storage_path = asset_record["storage_path"]
+        mime_type = asset_record["mime_type"]
+
+        # Download from storage using service-role client
+        import asyncio
+        client = self.supabase._get_client()
+        try:
+            file_bytes = await asyncio.to_thread(
+                lambda: self.supabase._get_client().storage.from_("visual-assets").download(asset_record["storage_path"])
+            )
+        except Exception as e:
+            logger.error("asset_download_failed", extra={"asset_id": str(asset_id), "error": str(e)})
+            raise RuntimeError(f"Failed to download asset: {e}")
+
+        # Build metadata from asset record
+        metadata = VisualAssetMetadata(
+            width=asset_record["width"],
+            height=asset_record["height"],
+            mime_type=mime_type,
+            checksum=asset_record["checksum"],
+            palette=asset_record.get("metadata", {}).get("palette"),
+            dominant_colors=asset_record.get("metadata", {}).get("dominant_colors"),
+            perceptual_hash=asset_record.get("metadata", {}).get("perceptual_hash"),
+        )
+
+        return file_bytes, mime_type, metadata
+
     async def analyze_assets(
         self,
         asset_ids: List[UUID],
