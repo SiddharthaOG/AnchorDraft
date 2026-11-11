@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     LLM_FALLBACK_PROVIDER: str = "gemini"
     LLM_FALLBACK_ENABLED: bool = True
 
+    # Environment (development, staging, production) - no default, must be explicitly set
+    ENVIRONMENT: str
+
     # Groq settings
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "openai/gpt-oss-120b"
@@ -90,10 +93,60 @@ class Settings(BaseSettings):
             return ""
         return str(value)
 
+    @field_validator("ENVIRONMENT", mode="before")
+    @classmethod
+    def _normalize_environment(cls, value: Any) -> str:
+        """Normalize and validate the deployment environment."""
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                "ENVIRONMENT must be explicitly set to one of: "
+                "development, dev, local, test, staging, production, prod"
+            )
+
+        normalized = value.strip().lower()
+
+        allowed_environments = {
+            "development",
+            "dev",
+            "local",
+            "test",
+            "staging",
+            "production",
+            "prod",
+        }
+
+        if normalized not in allowed_environments:
+            raise ValueError(
+                f"Unsupported ENVIRONMENT '{normalized}'. "
+                f"Allowed values: {', '.join(sorted(allowed_environments))}"
+            )
+
+        return normalized
+
     @property
     def ALLOWED_ORIGINS_LIST(self) -> list[str]:
         """Parsed list of allowed origins."""
         return _parse_allowed_origins(self.ALLOWED_ORIGINS)
+
+    @property
+    def is_local_environment(self) -> bool:
+        """Check if running in a local development environment where fake provider is allowed."""
+        return self.ENVIRONMENT in ("development", "dev", "local", "test")
+
+    @property
+    def is_production_environment(self) -> bool:
+        """Check if running in a production environment."""
+        return self.ENVIRONMENT in ("production", "prod")
+
+    @property
+    def is_staging_environment(self) -> bool:
+        """Check if running in a staging environment."""
+        return self.ENVIRONMENT == "staging"
+
+    @property
+    def requires_real_provider(self) -> bool:
+        """Check if environment requires real (non-fake) providers."""
+        return not self.is_local_environment
 
 
 @lru_cache(maxsize=1)
@@ -105,6 +158,3 @@ def get_settings() -> Settings:
 def clear_settings_cache() -> None:
     """Clear the settings cache (for testing)."""
     get_settings.cache_clear()
-
-
-settings = get_settings()

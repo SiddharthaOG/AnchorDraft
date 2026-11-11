@@ -112,6 +112,7 @@ class KitLintResponse(BaseModel):
     ok: bool
     issues: List[LintIssue]
     stats: LintStats
+    warnings: List[str] = Field(default_factory=list)
 
 
 # Configuration constants

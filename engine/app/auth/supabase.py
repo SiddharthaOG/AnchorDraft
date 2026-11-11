@@ -33,6 +33,12 @@ class SupabaseClient:
         response = client.table("organizations").select("*").eq("id", org_id).execute()
         return response.data[0] if response.data else None
 
+    def get_kit(self, kit_id: str) -> dict | None:
+        """Get a kit by ID."""
+        client = self._get_client()
+        response = client.table("brand_kits").select("*").eq("id", kit_id).execute()
+        return response.data[0] if response.data else None
+
     def get_active_kit(self, org_id: str) -> dict | None:
         """Get the active brand kit for an organization."""
         client = self._get_client()

@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 engine/.venv/
+engine/.venv312/
 __pycache__/
 *.pyc
 .pytest_cache/

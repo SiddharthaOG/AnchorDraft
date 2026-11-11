@@ -1058,12 +1058,12 @@ class TestExceptionIsolation:
         # constructor isolation by creating a subclass that fails in __init__
         # and testing through a custom runner call
         
-        from engine.app.checks.deterministic import run_deterministic_checks, RuleConfig
+        from app.checks.deterministic import run_deterministic_checks, RuleConfig
         from engine.app.models.pipeline import DeterministicFindingCandidate
         
         # Create a minimal check class that fails in constructor
-        from engine.app.checks.deterministic import DeterministicCheck
-        from engine.app.checks.deterministic import check_map
+        from app.checks.deterministic import DeterministicCheck
+        from app.checks.deterministic import check_map
         
         class FailingConstructorCheck(DeterministicCheck):
             check_name = "failing_constructor"
@@ -1110,7 +1110,7 @@ class TestExceptionIsolation:
     def test_execution_valueerror_classified_as_execution_error(self):
         """Test that ValueError from find_matches is execution error, not config error."""
         
-        from engine.app.checks.deterministic import check_map, DeterministicCheck
+        from app.checks.deterministic import check_map, DeterministicCheck
         
         class ExecutionValueErrorCheck(DeterministicCheck):
             check_name = "execution_valueerror"
@@ -1160,7 +1160,7 @@ class TestExceptionIsolation:
     def test_execution_runtimeerror_classified_as_execution_error(self):
         """Test that RuntimeError from find_matches is execution error."""
         
-        from engine.app.checks.deterministic import check_map, DeterministicCheck
+        from app.checks.deterministic import check_map, DeterministicCheck
         
         class ExecutionRuntimeErrorCheck(DeterministicCheck):
             check_name = "execution_runtimeerror"
@@ -1236,7 +1236,7 @@ class TestExceptionIsolation:
     def test_config_non_valueerror_classified_as_config_error(self):
         """Test that non-ValueError from validate_config is config error with prefix."""
         
-        from engine.app.checks.deterministic import check_map, DeterministicCheck
+        from app.checks.deterministic import check_map, DeterministicCheck
         
         class ConfigTypeErrorCheck(DeterministicCheck):
             check_name = "config_typeerror"
