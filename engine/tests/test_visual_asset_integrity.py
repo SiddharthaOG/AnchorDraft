@@ -177,11 +177,16 @@ async def test_revision_rpc_failure_propagates():
 def test_sql_migrations_enforce_required_database_contracts():
     root = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
     asset_sql = (root / "20261113000001_visual_asset_integrity.sql").read_text(encoding="utf-8")
+    link_sql = (root / "20261112000001_visual_asset_content_link.sql").read_text(encoding="utf-8")
     review_sql = (root / "20261113000002_exact_visual_revision_evidence.sql").read_text(encoding="utf-8")
     lease_sql = (root / "20261107000001_review_lease.sql").read_text(encoding="utf-8")
     historical_visual_sql = (root / "20261112000002_update_engine_complete_review_for_visual.sql").read_text(encoding="utf-8")
 
     assert "_actor_user_id uuid" in asset_sql
+    assert "_checksum !~ '^[0-9a-fA-F]{64}$'" in asset_sql
+    assert "revoke all on function public.get_visual_assets_for_revision(uuid, uuid)" in link_sql
+    assert "grant execute on function public.get_visual_assets_for_revision(uuid, uuid) to service_role" in link_sql
+    assert "get_visual_assets_for_revision(uuid)" not in link_sql
     assert "on conflict (org_id, checksum) do nothing" in asset_sql.lower()
     assert "creator','owner" in asset_sql
     assert "cleanup_new_visual_asset(uuid,uuid,text,uuid)" in asset_sql

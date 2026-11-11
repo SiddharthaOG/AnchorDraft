@@ -205,8 +205,8 @@ grant execute on function public.get_visual_assets_for_content(uuid) to authenti
 revoke all on function public.link_visual_asset_to_content(uuid, uuid, uuid, uuid) from public, anon, authenticated;
 grant execute on function public.link_visual_asset_to_content(uuid, uuid, uuid, uuid) to service_role;
 
-revoke all on function public.get_visual_assets_for_revision(uuid) from public, anon;
-grant execute on function public.get_visual_assets_for_revision(uuid) to service_role;
+revoke all on function public.get_visual_assets_for_revision(uuid, uuid) from public, anon;
+grant execute on function public.get_visual_assets_for_revision(uuid, uuid) to service_role;
 
 revoke all on function public.get_visual_assets_for_content(uuid) from public, anon;
 grant execute on function public.get_visual_assets_for_content(uuid) to service_role;

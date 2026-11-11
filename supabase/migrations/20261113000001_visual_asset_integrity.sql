@@ -42,8 +42,8 @@ begin
     if _width is null or _width <= 0 or _height is null or _height <= 0 then
         raise exception 'validation: image dimensions must be positive';
     end if;
-    if _checksum is null or btrim(_checksum) = '' then
-        raise exception 'validation: checksum is required';
+    if _checksum is null or _checksum !~ '^[0-9a-fA-F]{64}$' then
+        raise exception 'validation: checksum must be a 64-character SHA-256 hex digest';
     end if;
     if _metadata is null or jsonb_typeof(_metadata) <> 'object' then
         raise exception 'validation: metadata must be a JSON object';
