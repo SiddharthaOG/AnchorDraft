@@ -5,11 +5,13 @@ review engine components into a complete execution flow.
 """
 
 import asyncio
+import json
 import logging
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Optional
+from uuid import UUID
 
 from app.auth.supabase import get_supabase_client
 from app.checks import run_deterministic_checks, DeterministicCheckResult
@@ -41,9 +43,17 @@ from app.models.pipeline import (
     BlockedError,
     ValidatedFinding,
     ModelFindingCandidate,
+    DeterministicFindingCandidate,
 )
 from app.store.db import get_db_pool
 from app.auth.supabase import SupabaseClient
+from app.visual import (
+    run_visual_analysis,
+    VisualGuideline,
+    parse_visual_guidelines,
+    VisualAnalysisResult,
+)
+from app.visual.deterministic import VisualFindingCandidate as VisualDetFindingCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -374,6 +384,33 @@ class ReviewOrchestrator:
             {f.fact_key for f in valid_facts},
         )
 
+    async def _load_visual_asset_ids(self, revision_id: str, org_id: str) -> list:
+        """Load visual asset IDs associated with a revision."""
+        try:
+            # Get revision to find content
+            revision = self.supabase.get_revision(revision_id)
+            if not revision:
+                return []
+
+            content_id = revision["content_id"]
+            # Get visual assets linked to this content/revision
+            # For now, we'll look for assets uploaded by the same org
+            # In a full implementation, there would be a junction table
+            content = self.supabase.get_content(content_id)
+            if not content:
+                return []
+
+            # Get recent assets for this org
+            try:
+                response = await self.supabase._get_client().table("visual_assets").select("id").eq("org_id", org_id).order("created_at", desc=True).limit(10).execute()
+                return [UUID(asset["id"]) for asset in (response.data or [])]
+            except Exception as e:
+                logger.error("load_visual_assets_failed", extra={"org_id": org_id, "error": str(e)})
+                return []
+        except Exception as e:
+            logger.error("load_visual_asset_ids_failed", extra={"revision_id": revision_id, "error": str(e)})
+            return []
+
     async def _run_validation(
         self,
         text: str,
@@ -526,17 +563,71 @@ class ReviewOrchestrator:
             # 3. Load rules and facts
             rules, facts = self.loader.load_rules_and_facts(pipeline_input.kit_id)
 
+            # 3b. Load visual guidelines from kit (optional - handle missing Supabase)
+            visual_guidelines = {}
+            try:
+                kit = self.supabase._get_client().table("brand_kits").select("visual_guidelines").eq("id", pipeline_input.kit_id).execute()
+                visual_guidelines = kit.data[0].get("visual_guidelines", {}) if kit.data else {}
+            except Exception as e:
+                logger.warning("visual_guidelines_load_failed", extra={"kit_id": pipeline_input.kit_id, "error": str(e)})
+                visual_guidelines = {}
+
+            # 3c. Load visual assets associated with this revision
+            asset_ids = await self._load_visual_asset_ids(pipeline_input.revision_id, pipeline_input.org_id)
+
             # 4. Extract offered keys
             model_offered_rules, model_offered_facts = self._extract_offered_keys(rules, facts)
 
-            # 5. Run deterministic checks
+            # 5. Run deterministic checks (text)
             det_result = await self._run_deterministic_checks(
                 pipeline_input.revision_text,
                 rules,
             )
             deterministic_candidates, skipped_checks = self._convert_deterministic_to_pipeline(det_result)
 
-            # 6. Run model analysis
+            # 5b. Run visual analysis (skip if no assets or guidelines)
+            visual_result = VisualAnalysisResult(
+                deterministic_findings=[],
+                model_findings=[],
+                llm_status="skipped",
+                warnings=[],
+                raw_model_count=0,
+                dropped_model_count=0,
+            )
+            if asset_ids and visual_guidelines:
+                try:
+                    visual_result = await run_visual_analysis(
+                        asset_ids=asset_ids,
+                        revision_text=pipeline_input.revision_text,
+                        purpose=pipeline_input.purpose,
+                        channel=pipeline_input.channel,
+                        visual_guidelines=visual_guidelines,
+                        approved_logo_hashes=visual_guidelines.get("logo", {}).get("approved_hashes", []) if visual_guidelines else [],
+                    )
+                except Exception as e:
+                    logger.warning("visual_analysis_failed", extra={"error": str(e)})
+                    # Continue with empty visual result
+
+            # Convert visual deterministic findings to pipeline format
+            visual_deterministic_candidates = []
+            for vf in visual_result.deterministic_findings:
+                visual_deterministic_candidates.append(VisualDetFindingCandidate(
+                    ref_key=vf.ref_key,
+                    quote=vf.quote if hasattr(vf, 'quote') else vf.explanation[:200],
+                    start_offset=vf.region.get('x', 0) * 1000 if hasattr(vf, 'region') else 0,
+                    end_offset=(vf.region.get('x', 0) + vf.region.get('w', 0)) * 1000 if hasattr(vf, 'region') else 1,
+                    explanation=vf.explanation,
+                    suggestion=vf.suggestion,
+                    rule_category=vf.category,
+                    severity=vf.severity,
+                    needs_reviewer=vf.needs_reviewer,
+                    confidence=vf.confidence,
+                ))
+
+            # Combine deterministic candidates
+            all_deterministic_candidates = deterministic_candidates + visual_deterministic_candidates
+
+            # 6. Run model analysis (text + visual)
             warnings = []
             if skipped_checks:
                 warnings.extend([f"Check skipped: {s['reason']}" for s in skipped_checks])
@@ -549,7 +640,8 @@ class ReviewOrchestrator:
             model_warnings = []
 
             try:
-                model_candidates, _, model, _, input_tokens, output_tokens, model_warnings = \
+                # Text model analysis
+                text_model_candidates, _, model, _, input_tokens, output_tokens, model_warnings = \
                     await self._run_model_analysis(
                         pipeline_input.revision_text,
                         rules,
@@ -557,8 +649,15 @@ class ReviewOrchestrator:
                         pipeline_input.purpose,
                         pipeline_input.channel,
                     )
-                llm_findings_raw = len(model_candidates)
+                llm_findings_raw = len(text_model_candidates)
                 warnings.extend(model_warnings)
+
+                # Add visual model findings
+                model_candidates = text_model_candidates + visual_result.model_findings
+                llm_findings_raw = len(model_candidates)
+
+                # Combine warnings
+                warnings.extend(visual_result.warnings)
             except (RateLimitedError, TimeoutError, UnavailableError, BadOutputError, BlockedError, ProviderError) as e:
                 llm_status = "failed"
                 logger.warning(
@@ -566,7 +665,9 @@ class ReviewOrchestrator:
                     extra={"review_id": review_id, "error_type": type(e).__name__, "error": str(e)},
                 )
                 warnings.append(f"model unavailable: deterministic checks only ({type(e).__name__})")
-                model_candidates = []
+                # Keep visual deterministic findings, but visual model findings failed
+                model_candidates = visual_result.model_findings
+                warnings.extend(visual_result.warnings)
             except Exception as e:
                 llm_status = "failed"
                 logger.exception(
@@ -574,12 +675,13 @@ class ReviewOrchestrator:
                     extra={"review_id": review_id, "error": str(e)},
                 )
                 warnings.append(f"model error: deterministic checks only")
-                model_candidates = []
+                model_candidates = visual_result.model_findings
+                warnings.extend(visual_result.warnings)
 
             # 7. Run validation
             validation_result = await self._run_validation(
                 pipeline_input.revision_text,
-                deterministic_candidates,
+                all_deterministic_candidates,
                 model_candidates,
                 rules,
                 facts,
