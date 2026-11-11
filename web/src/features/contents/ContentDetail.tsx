@@ -333,13 +333,18 @@ function ReviewStatusSection({
       <div className="text-center py-8 text-gray-500">
         <p>No review started for this revision.</p>
         {isContentEditable && (
+          <>
           <button
-            onClick={() => handleStartReview()}
+            type="button"
+            onClick={() => { void handleStartReview(); }}
             disabled={startingReview}
-            className="mt-4 px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary-dark disabled:opacity-50"
+            aria-busy={startingReview}
+            className="mt-4 inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
           >
-            {startingReview ? 'Preparing preview...' : 'Preview Review'}
+            {startingReview ? 'Preparing review preview...' : 'Start Review'}
           </button>
+          <p className="mt-2 text-xs text-gray-500">A privacy preview will appear before any AI provider is called.</p>
+          </>
         )}
       </div>
     );

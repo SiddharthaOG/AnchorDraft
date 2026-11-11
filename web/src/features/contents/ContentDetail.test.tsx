@@ -558,21 +558,24 @@ describe('ContentDetail', () => {
   });
 
   describe('Existing safeguards preserved', () => {
-    it('Preview Review button is enabled when no review exists', { timeout: 15000 }, async () => {
+    it('Start Review button is enabled when no review exists', { timeout: 15000 }, async () => {
       // Remove the default review
       mockGetLatestReviewForRevision.mockResolvedValueOnce(null);
 
       await renderAndWaitForLoad(<ContentDetail />);
 
-      expect(screen.getByRole('button', { name: 'Preview Review' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Preview Review' })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Start Review' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Start Review' })).not.toBeDisabled();
     });
 
     it('shows the redacted preview and requires explicit consent before confirmation', { timeout: 15000 }, async () => {
       mockGetLatestReviewForRevision.mockResolvedValue(null);
       await renderAndWaitForLoad(<ContentDetail />);
 
-      fireEvent.click(screen.getByRole('button', { name: 'Preview Review' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Start Review' }));
+      await waitFor(() => {
+        expect(mockCreateReviewPreview).toHaveBeenCalledWith('revision-1');
+      });
       const dialog = await screen.findByRole('dialog');
       expect(screen.getAllByText('Contact [EMAIL-12345678]').length).toBeGreaterThan(0);
       expect(screen.getByText(/Image pixels are not OCR-redacted/)).toBeInTheDocument();
