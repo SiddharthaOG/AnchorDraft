@@ -87,45 +87,47 @@ async def lint_kit(
                         "message": f"Unknown deterministic check type: {check_type!r}",
                     })
                 else:
-                    try:
-                        checker = check_map[check_type](RuleConfig(
-                            check=check_type,
-                            config=raw_config,
-                            rule_key=rule["rule_key"],
-                            category=rule["category"],
-                            severity=rule["severity"],
-                            guideline_text=rule.get("guideline_text", ""),
-                            needs_reviewer=rule.get("needs_reviewer", False),
-                        ))
-                        checker.validate_config()
-                    except ValueError as e:
+                    # Validate guideline_text is a non-empty string
+                    guideline_text = rule.get("guideline_text", "")
+                    if not isinstance(guideline_text, str) or not guideline_text:
                         issues.append({
                             "severity": "error",
-                            "code": "INVALID_CONFIG",
+                            "code": "EMPTY_GUIDELINE" if isinstance(guideline_text, str) and not guideline_text else "INVALID_GUIDELINE_TEXT",
                             "ref_key": rule.get("rule_key"),
-                            "message": (
-                                f"Deterministic rule {rule.get('rule_key')} "
-                                f"has invalid config: {e}"
-                            ),
+                            "message": f"Rule {rule.get('rule_key')} guideline_text must be a non-empty string",
                         })
-                    except Exception as e:
-                        issues.append({
-                            "severity": "error",
-                            "code": "INVALID_CONFIG",
-                            "ref_key": rule.get("rule_key"),
-                            "message": (
-                                f"Deterministic rule {rule.get('rule_key')} "
-                                f"has invalid config: {type(e).__name__}"
-                            ),
-                        })
-
-        if not rule.get("guideline_text"):
-            issues.append({
-                "severity": "error",
-                "code": "EMPTY_GUIDELINE",
-                "ref_key": rule.get("rule_key"),
-                "message": f"Rule {rule.get('rule_key')} has empty guideline text",
-            })
+                    else:
+                        try:
+                            checker = check_map[check_type](RuleConfig(
+                                check=check_type,
+                                config=raw_config,
+                                rule_key=rule["rule_key"],
+                                category=rule["category"],
+                                severity=rule["severity"],
+                                guideline_text=guideline_text,
+                                needs_reviewer=rule.get("needs_reviewer", False),
+                            ))
+                            checker.validate_config()
+                        except ValueError as e:
+                            issues.append({
+                                "severity": "error",
+                                "code": "INVALID_CONFIG",
+                                "ref_key": rule.get("rule_key"),
+                                "message": (
+                                    f"Deterministic rule {rule.get('rule_key')} "
+                                    f"has invalid config: {e}"
+                                ),
+                            })
+                        except Exception as e:
+                            issues.append({
+                                "severity": "error",
+                                "code": "INVALID_CONFIG",
+                                "ref_key": rule.get("rule_key"),
+                                "message": (
+                                    f"Deterministic rule {rule.get('rule_key')} "
+                                    f"has invalid config: {type(e).__name__}"
+                                ),
+                            })
 
     # Check: facts not past valid_until
     from datetime import date
@@ -138,7 +140,7 @@ async def lint_kit(
     # Enforce documented limits (from REVIEW_ENGINE.md)
     # Limit: at most 100 phrases per rule, each at most 100 characters
     # Limit: at most 50 deterministic rules per kit
-    deterministic_rules_list = [r for r in rules if r.get("check_kind") == "deterministic"]
+    deterministic_rules_list = [r for r in rules if isinstance(r, dict) and r.get("check_kind") == "deterministic"]
     if len(deterministic_rules_list) > 50:
         issues.append({
             "severity": "error",
@@ -243,11 +245,17 @@ async def lint_kit(
                         "message": f"Required disclosure rule {rule.get('rule_key')} exceeds 100 require_any terms (has {len(require_any)})",
                     })
 
-    # Calculate prompt size estimate
+    # Calculate prompt size estimate (safely handle non-string guideline_text and non-dict rules/facts)
+    def safe_len(value):
+        """Safely get length of a string value, returning 0 for non-strings."""
+        if isinstance(value, str):
+            return len(value)
+        return 0
+
     total_chars = sum(
-        len(r.get("guideline_text", "")) for r in rules
+        safe_len(r.get("guideline_text")) for r in rules if isinstance(r, dict)
     ) + sum(
-        len(f.get("statement", "")) + len(f.get("source_note", "")) for f in facts
+        safe_len(f.get("statement")) + safe_len(f.get("source_note")) for f in facts if isinstance(f, dict)
     )
     prompt_cap = 24000  # From REVIEW_ENGINE.md
 
@@ -259,9 +267,9 @@ async def lint_kit(
             "message": f"Kit exceeds prompt character cap ({total_chars} > {prompt_cap})",
         })
 
-    # Count rule types
-    llm_rules = sum(1 for r in rules if r.get("check_kind") == "llm")
-    deterministic_rules = sum(1 for r in rules if r.get("check_kind") == "deterministic")
+    # Count rule types (safely handle non-dict rules)
+    llm_rules = sum(1 for r in rules if isinstance(r, dict) and r.get("check_kind") == "llm")
+    deterministic_rules = sum(1 for r in rules if isinstance(r, dict) and r.get("check_kind") == "deterministic")
 
     ok = len(issues) == 0
 
