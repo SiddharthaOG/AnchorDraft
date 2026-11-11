@@ -1,6 +1,7 @@
 """Visual analyzer coordinating deterministic and model-assisted visual checks."""
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from typing import List, Optional, Set
@@ -56,48 +57,6 @@ class VisualAnalyzer:
         self.asset_service = get_visual_asset_service()
         self.supabase = get_supabase_client()
 
-    async def load_asset_bytes(self, asset_id: UUID) -> tuple[bytes, str, VisualAssetMetadata]:
-        """Load asset bytes and metadata from storage."""
-        # Get asset record from database
-        asset_record = await self._get_asset_record(asset_id)
-        if not asset_record:
-            raise ValueError(f"Asset {asset_id} not found")
-
-        storage_path = asset_record["storage_path"]
-        mime_type = asset_record["mime_type"]
-
-        # Download from storage
-        client = self.asset_service._get_client()
-        bucket = client.storage.from_("visual-assets")
-        try:
-            file_bytes = bucket.download(storage_path)
-        except Exception as e:
-            logger.error("asset_download_failed", extra={"asset_id": str(asset_id), "error": str(e)})
-            raise RuntimeError(f"Failed to download asset: {e}")
-
-        # Parse metadata from database record
-        metadata = VisualAssetMetadata(
-            width=asset_record["width"],
-            height=asset_record["height"],
-            mime_type=mime_type,
-            checksum=asset_record["checksum"],
-            palette=asset_record.get("metadata", {}).get("palette"),
-            dominant_colors=asset_record.get("metadata", {}).get("dominant_colors"),
-            perceptual_hash=asset_record.get("metadata", {}).get("perceptual_hash"),
-        )
-
-        return file_bytes, mime_type, metadata
-
-    async def _get_asset_record(self, asset_id: UUID) -> Optional[dict]:
-        """Get asset record from database."""
-        try:
-            response = await self.supabase._get_client().table("visual_assets").select("*").eq("id", str(asset_id)).execute()
-            if response.data:
-                return response.data[0]
-        except Exception as e:
-            logger.error("get_asset_record_failed", extra={"asset_id": str(asset_id), "error": str(e)})
-        return None
-
     async def load_visual_assets_for_review(self, revision_id: UUID) -> List[dict]:
         """Load visual assets explicitly associated with a revision.
 
@@ -105,19 +64,29 @@ class VisualAnalyzer:
         to this revision (or its parent content), enforcing organization isolation.
         """
         try:
+            # First get the revision to find the org_id
+            revision = self.supabase.get_revision(str(revision_id))
+            if not revision:
+                return []
+            org_id = revision["org_id"]
+
             # Call the revision-specific RPC that enforces:
             # - Revision exists and belongs to the organization
             # - Assets are explicitly linked to this revision
             # - Organization isolation is enforced
-            response = await self.supabase._get_client().rpc(
-                "get_visual_assets_for_revision",
-                {"_revision_id": str(revision_id)},
-            ).execute()
+            import asyncio
+            response = await asyncio.to_thread(
+                lambda: self.supabase._get_client().rpc(
+                    "get_visual_assets_for_revision",
+                    {"_revision_id": str(revision_id), "_org_id": str(org_id)},
+                ).execute()
+            )
 
             return response.data or []
         except Exception as e:
             logger.error("load_visual_assets_for_review_failed", extra={"revision_id": str(revision_id), "error": str(e)})
-            return []
+            # Don't silently return empty list on failure - propagate the error
+            raise
 
     async def analyze_assets(
         self,

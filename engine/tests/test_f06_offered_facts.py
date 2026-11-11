@@ -30,6 +30,7 @@ class TestF06ModelOfferedFacts:
         # Mock the internal methods
         orch._claim_review = AsyncMock(return_value=(True, uuid4()))
         orch._load_review_data = AsyncMock()
+        orch._load_visual_asset_ids = AsyncMock(return_value=[])
         orch._run_deterministic_checks = AsyncMock()
         orch._convert_deterministic_to_pipeline = MagicMock(return_value=([], []))
         orch._run_model_analysis = AsyncMock()

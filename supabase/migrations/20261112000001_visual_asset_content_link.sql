@@ -37,8 +37,8 @@ create policy visual_asset_contents_insert on public.visual_asset_contents
 create or replace function public.link_visual_asset_to_content(
     _visual_asset_id uuid,
     _content_id uuid,
-    _revision_id uuid default null,
-    _actor_user_id uuid
+    _actor_user_id uuid,
+    _revision_id uuid default null
 )
 returns void
 language plpgsql security definer set search_path = ''
@@ -121,20 +121,16 @@ grant execute on function public.link_visual_asset_to_content(uuid, uuid, uuid, 
 
 -- 2. RPC function to get visual assets for a revision
 create or replace function public.get_visual_assets_for_revision(
-    _revision_id uuid
+    _revision_id uuid,
+    _org_id uuid
 )
 returns setof public.visual_assets
 language plpgsql security definer set search_path = ''
 as $$
 declare
-    _uid uuid := (select auth.uid());
     _revision public.revisions%rowtype;
     _content_org uuid;
 begin
-    if _uid is null then
-        raise exception 'unauthenticated';
-    end if;
-
     select * into _revision
     from public.revisions
     where id = _revision_id;
@@ -147,7 +143,12 @@ begin
     from public.contents
     where id = _revision.content_id;
 
-    if not private.is_member(_content_org) then
+    if not found then
+        raise exception 'not_found';
+    end if;
+
+    -- Verify the revision belongs to the requesting organization
+    if _content_org <> _org_id then
         raise exception 'forbidden';
     end if;
 
@@ -159,8 +160,8 @@ begin
     order by va.created_at desc;
 end $$;
 
-revoke all on function public.get_visual_assets_for_revision(uuid) from public, anon;
-grant execute on function public.get_visual_assets_for_revision(uuid) to authenticated;
+revoke all on function public.get_visual_assets_for_revision(uuid, uuid) from public, anon;
+grant execute on function public.get_visual_assets_for_revision(uuid, uuid) to service_role;
 
 -- 3. RPC function to get visual assets for a content
 create or replace function public.get_visual_assets_for_content(
@@ -201,11 +202,11 @@ revoke all on function public.get_visual_assets_for_content(uuid) from public, a
 grant execute on function public.get_visual_assets_for_content(uuid) to authenticated;
 
 -- Grant execute permissions
-revoke all on function public.link_visual_asset_to_content(uuid, uuid, uuid, uuid) from public, anon;
-grant execute on function public.link_visual_asset_to_content(uuid, uuid, uuid, uuid) to authenticated;
+revoke all on function public.link_visual_asset_to_content(uuid, uuid, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.link_visual_asset_to_content(uuid, uuid, uuid, uuid) to service_role;
 
 revoke all on function public.get_visual_assets_for_revision(uuid) from public, anon;
-grant execute on function public.get_visual_assets_for_revision(uuid) to authenticated;
+grant execute on function public.get_visual_assets_for_revision(uuid) to service_role;
 
 revoke all on function public.get_visual_assets_for_content(uuid) from public, anon;
-grant execute on function public.get_visual_assets_for_content(uuid) to authenticated;
+grant execute on function public.get_visual_assets_for_content(uuid) to service_role;

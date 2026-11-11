@@ -395,15 +395,20 @@ class ReviewOrchestrator:
             # - Revision exists and belongs to the organization
             # - Assets are explicitly linked to this revision
             # - Organization isolation is enforced
-            response = await self.supabase._get_client().rpc(
-                "get_visual_assets_for_revision",
-                {"_revision_id": revision_id},
-            ).execute()
+            # Use asyncio.to_thread since the Supabase client is synchronous
+            import asyncio
+            response = await asyncio.to_thread(
+                lambda: self.supabase._get_client().rpc(
+                    "get_visual_assets_for_revision",
+                    {"_revision_id": revision_id, "_org_id": org_id},
+                ).execute()
+            )
 
             return [UUID(asset["id"]) for asset in (response.data or [])]
         except Exception as e:
             logger.error("load_visual_asset_ids_failed", extra={"revision_id": revision_id, "error": str(e)})
-            return []
+            # Don't silently return empty list on failure - propagate the error
+            raise
 
     async def _run_validation(
         self,
