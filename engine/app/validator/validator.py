@@ -53,6 +53,8 @@ class ValidationContext:
     model_offered_rule_keys: Set[str] = field(default_factory=set)
     # Fact keys actually offered to the model (non-expired facts only)
     model_offered_fact_keys: Set[str] = field(default_factory=set)
+    # Visual rules explicitly included in the vision-model prompt.
+    visual_model_offered_rule_keys: Set[str] = field(default_factory=set)
 
 
 # ============================================================================
@@ -169,10 +171,25 @@ VALID_DROP_REASONS = {
     "quote_not_found", "duplicate", "too_many"
 }
 
-VALID_ISSUES = {"violation", "contradicts_fact", "outdated_fact", "unsupported_claim"}
+VALID_ISSUES = {
+    "violation",
+    "contradicts_fact",
+    "outdated_fact",
+    "unsupported_claim",
+    "logo_misuse",
+    "palette_violation",
+    "contrast_violation",
+    "unauthorized_logo",
+}
 FACT_ISSUES = {"contradicts_fact", "outdated_fact"}
 CLAIM_ISSUES = {"unsupported_claim"}
-RULE_ISSUES = {"violation"}
+RULE_ISSUES = {
+    "violation",
+    "logo_misuse",
+    "palette_violation",
+    "contrast_violation",
+    "unauthorized_logo",
+}
 
 
 def get_candidate_issue(candidate, is_deterministic: bool) -> str:
@@ -230,6 +247,7 @@ def validate_reference(
     candidate,
     is_deterministic: bool,
     context: ValidationContext,
+    is_visual: bool = False,
 ) -> tuple[Optional[str], Optional[RuleRecord], Optional[FactRecord]]:
     """
     Validate reference existence and eligibility.
@@ -256,7 +274,12 @@ def validate_reference(
     else:
         # Model candidates must reference only rules/facts offered to the model
         if rule_record is not None:
-            if ref_key not in context.model_offered_rule_keys:
+            offered_rule_keys = (
+                context.visual_model_offered_rule_keys
+                if is_visual
+                else context.model_offered_rule_keys
+            )
+            if ref_key not in offered_rule_keys:
                 return "unknown_ref", None, None
         elif fact_record is not None:
             if ref_key not in context.model_offered_fact_keys:
@@ -513,15 +536,21 @@ def run_citation_validator(
             return
 
         # Step 2: Reference existence and eligibility
+        is_deterministic = source == "deterministic"
         ref_error, rule_record, fact_record = validate_reference(
-            candidate, True, context  # Visual findings are always treated as deterministic for reference validation
+            candidate,
+            is_deterministic,
+            context,
+            is_visual=True,
         )
         if ref_error:
             result.add_dropped(ref_error)
             return
 
         # Step 3: Reference fits issue
-        ref_fit_error = validate_reference_fits_issue(candidate, True, rule_record, fact_record)
+        ref_fit_error = validate_reference_fits_issue(
+            candidate, is_deterministic, rule_record, fact_record
+        )
         if ref_fit_error:
             result.add_dropped(ref_fit_error)
             return
@@ -611,12 +640,18 @@ def run_citation_validator(
         else:
             process_text_candidate(candidate, is_deterministic, source)
 
-    # Process deterministic candidates first
+    # Process text and visual deterministic candidates before model findings so
+    # model findings cannot duplicate a deterministic finding for the same evidence.
     for candidate in deterministic_candidates:
         process_candidate(candidate, True, "deterministic")
+    for candidate in visual_deterministic_candidates:
+        process_candidate(candidate, True, "deterministic")
 
-    # Then process model candidates
+    # Process text model findings, then vision-model findings. Visual model
+    # references are checked against the visual rules actually offered to vision.
     for candidate in model_candidates:
+        process_candidate(candidate, False, "llm")
+    for candidate in visual_model_candidates:
         process_candidate(candidate, False, "llm")
 
     # Apply cap: keep at most 25 findings

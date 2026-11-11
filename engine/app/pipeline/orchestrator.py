@@ -54,6 +54,7 @@ from app.visual import (
     VisualAnalysisResult,
     VisualFindingCandidate,
 )
+from app.visual.vision_providers import get_visual_guideline_ref_keys
 
 logger = logging.getLogger(__name__)
 
@@ -421,6 +422,7 @@ class ReviewOrchestrator:
         model_offered_facts: set,
         visual_deterministic_candidates: list = None,
         visual_model_candidates: list = None,
+        visual_model_offered_rules: set = None,
     ) -> AggregateValidationResult:
         """Run citation validator on all candidates."""
         context = self.loader.load_validation_context(
@@ -447,6 +449,7 @@ class ReviewOrchestrator:
             )
             for f in facts
         ]
+        context.visual_model_offered_rule_keys = visual_model_offered_rules or set()
 
         return run_citation_validator(
             text,
@@ -638,10 +641,8 @@ class ReviewOrchestrator:
             # They will be passed directly to the validator which now handles visual candidates
             visual_deterministic_candidates = list(visual_result.deterministic_findings)
 
-            # Combine deterministic candidates (text + visual)
-            all_deterministic_candidates = deterministic_candidates + visual_deterministic_candidates
-
-            # 6. Run model analysis (text + visual)
+            # 6. Run text model analysis. Visual candidates stay in their own
+            # typed collections and are passed separately to the shared validator.
             warnings = []
             if skipped_checks:
                 warnings.extend([f"Check skipped: {s['reason']}" for s in skipped_checks])
@@ -666,9 +667,7 @@ class ReviewOrchestrator:
                 llm_findings_raw = len(text_model_candidates)
                 warnings.extend(model_warnings)
 
-                # Add visual model findings
-                model_candidates = text_model_candidates + visual_result.model_findings
-                llm_findings_raw = len(model_candidates)
+                model_candidates = text_model_candidates
 
                 # Combine warnings
                 warnings.extend(visual_result.warnings)
@@ -679,8 +678,8 @@ class ReviewOrchestrator:
                     extra={"review_id": review_id, "error_type": type(e).__name__, "error": str(e)},
                 )
                 warnings.append(f"model unavailable: deterministic checks only ({type(e).__name__})")
-                # Keep visual deterministic findings, but visual model findings failed
-                model_candidates = visual_result.model_findings
+                # Visual analysis ran independently; preserve its valid findings.
+                model_candidates = []
                 warnings.extend(visual_result.warnings)
             except Exception as e:
                 llm_status = "failed"
@@ -689,14 +688,16 @@ class ReviewOrchestrator:
                     extra={"review_id": review_id, "error": str(e)},
                 )
                 warnings.append(f"model error: deterministic checks only")
-                model_candidates = visual_result.model_findings
+                model_candidates = []
                 warnings.extend(visual_result.warnings)
 
-            # 7. Run validation
+            # Count text and visual model output once, despite separate validation paths.
+            llm_findings_raw = len(model_candidates) + len(visual_result.model_findings)
+
             # 7. Run validation
             validation_result = await self._run_validation(
                 pipeline_input.revision_text,
-                all_deterministic_candidates,
+                deterministic_candidates,
                 model_candidates,
                 rules,
                 facts,
@@ -704,6 +705,7 @@ class ReviewOrchestrator:
                 model_offered_facts=model_offered_facts,
                 visual_deterministic_candidates=visual_deterministic_candidates,
                 visual_model_candidates=visual_result.model_findings,
+                visual_model_offered_rules=get_visual_guideline_ref_keys(visual_guidelines),
             )
 
             # 8. Prepare validator stats
