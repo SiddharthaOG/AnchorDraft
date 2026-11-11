@@ -321,12 +321,14 @@ function ReviewStatusSection({
   startingReview,
   handleStartReview,
   isContentEditable,
+  reviewActionError,
 }: {
   latestReview: Review | null;
   findings: FindingDisplay[];
   startingReview: boolean;
   handleStartReview: () => void;
   isContentEditable: boolean;
+  reviewActionError: string | null;
 }) {
   if (!latestReview) {
     return (
@@ -344,6 +346,7 @@ function ReviewStatusSection({
             {startingReview ? 'Preparing review preview...' : 'Start Review'}
           </button>
           <p className="mt-2 text-xs text-gray-500">A privacy preview will appear before any AI provider is called.</p>
+          {reviewActionError && <p role="alert" className="mx-auto mt-3 max-w-xl rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-left text-sm text-red-800">Could not prepare review preview: {reviewActionError}</p>}
           </>
         )}
       </div>
@@ -365,6 +368,7 @@ function ReviewStatusSection({
     <div className="bg-red-50 border border-red-200 rounded-lg p-4">
       <p className="font-medium text-red-800">Review Failed</p>
       <p className="text-red-600 text-sm mt-1">{latestReview.error || 'Unknown error'}</p>
+      {reviewActionError && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">Could not prepare review preview: {reviewActionError}</p>}
       <button
         onClick={() => handleStartReview()}
         disabled={startingReview}
@@ -437,6 +441,7 @@ export function ContentDetail() {
   const [submitting, setSubmitting] = useState(false);
   const [isCreatingRevision, setIsCreatingRevision] = useState(false);
   const [startingReview, setStartingReview] = useState(false);
+  const [reviewActionError, setReviewActionError] = useState<string | null>(null);
   const [reviewPreview, setReviewPreview] = useState<ReviewPreviewResponse | null>(null);
   const [imageConsent, setImageConsent] = useState(false);
   const [confirmingPreview, setConfirmingPreview] = useState(false);
@@ -490,6 +495,7 @@ export function ContentDetail() {
   useEffect(() => {
     setReviewPreview(null);
     setImageConsent(false);
+    setReviewActionError(null);
   }, [contentId]);
 
   // Reset selection when content changes
@@ -802,13 +808,15 @@ const startPolling = useCallback(() => {
     if (!targetRevisionId || startingReviewRef.current) return;
     startingReviewRef.current = true;
     setStartingReview(true);
+    setReviewActionError(null);
     setToastError(null);
     try {
       const preview = await createReviewPreview(targetRevisionId);
       setReviewPreview(preview);
       setImageConsent(false);
     } catch (err) {
-      setToastError(err instanceof Error ? err.message : 'Failed to prepare review preview');
+      const message = err instanceof Error ? err.message : 'Failed to prepare review preview';
+      setReviewActionError(message);
     } finally {
       setStartingReview(false);
       startingReviewRef.current = false;
@@ -1073,6 +1081,7 @@ const startPolling = useCallback(() => {
                 startingReview={startingReview}
                 handleStartReview={handleStartReview}
                 isContentEditable={isContentEditable}
+                reviewActionError={reviewActionError}
               />
             </div>
           </div>

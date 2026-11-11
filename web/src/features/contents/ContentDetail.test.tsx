@@ -601,6 +601,19 @@ describe('ContentDetail', () => {
       expect(mockCreateReviewPreview).toHaveBeenCalledWith('revision-1');
     });
 
+    it('shows preview API failures beside Start Review so a fast 4xx is not mistaken for an inert button', { timeout: 15000 }, async () => {
+      mockGetLatestReviewForRevision.mockResolvedValue(null);
+      mockCreateReviewPreview.mockRejectedValueOnce(new Error('Request validation failed: body.revision_id: invalid UUID'));
+
+      await renderAndWaitForLoad(<ContentDetail />);
+      fireEvent.click(screen.getByRole('button', { name: 'Start Review' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Could not prepare review preview: Request validation failed: body.revision_id: invalid UUID',
+      );
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
     it('can submit when review has zero findings', { timeout: 15000 }, async () => {
       // Content has draft status, review is done with zero findings
       await renderAndWaitForLoad(<ContentDetail />);

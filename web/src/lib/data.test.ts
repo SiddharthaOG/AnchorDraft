@@ -1036,6 +1036,20 @@ describe('review preview and confirmation API', () => {
     });
   });
 
+  it('parses FastAPI request-validation arrays instead of hiding the cause behind a generic 422', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      statusText: 'Unprocessable Entity',
+      json: async () => ({ detail: [{ loc: ['body', 'revision_id'], msg: 'Input should be a valid UUID', type: 'uuid_parsing' }] }),
+    });
+    await expect(createReviewPreview('not-a-uuid')).rejects.toMatchObject({
+      status: 422,
+      reason: 'request_validation_error',
+      message: 'Request validation failed: body.revision_id: Input should be a valid UUID',
+    });
+  });
+
   it('parses plain FastAPI detail strings', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,

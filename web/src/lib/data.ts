@@ -868,11 +868,24 @@ function getApiErrorDetails(payload: unknown): {
     ? body.error as Record<string, unknown>
     : undefined;
   const apiError = nestedError || topLevelError;
+  const validationIssues = Array.isArray(rawDetail)
+    ? rawDetail.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+    : [];
+  const validationMessage = validationIssues.length > 0
+    ? validationIssues.map(issue => {
+        const location = Array.isArray(issue.loc)
+          ? issue.loc.filter(part => typeof part === 'string' || typeof part === 'number').join('.')
+          : 'request';
+        const message = typeof issue.msg === 'string' ? issue.msg : 'Invalid value';
+        return `${location}: ${message}`;
+      }).join('; ')
+    : undefined;
   const rawMessage = apiError?.message
     ?? (typeof rawDetail === 'string' ? rawDetail : undefined)
-    ?? (typeof detail?.message === 'string' ? detail.message : undefined);
+    ?? (typeof detail?.message === 'string' ? detail.message : undefined)
+    ?? (validationMessage ? `Request validation failed: ${validationMessage}` : undefined);
   const rawRetryAfter = apiError?.retry_after_seconds ?? detail?.retry_after_seconds;
-  const rawReason = apiError?.reason ?? detail?.code;
+  const rawReason = apiError?.reason ?? detail?.code ?? (validationIssues.length ? 'request_validation_error' : undefined);
 
   return {
     message: typeof rawMessage === 'string' ? rawMessage : undefined,
