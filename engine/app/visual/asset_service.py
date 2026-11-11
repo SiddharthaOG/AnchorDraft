@@ -28,6 +28,15 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
 @dataclass
+class VisualAssetUploadResult:
+    asset_id: UUID
+    storage_path: str
+    metadata: "VisualAssetMetadata"
+    asset_record: dict
+    created: bool
+
+
+@dataclass
 class VisualAssetMetadata:
     """Metadata extracted from an uploaded visual asset."""
     width: int
@@ -235,116 +244,92 @@ class VisualAssetService:
         user_id: UUID,
         file_bytes: bytes,
         mime_type: str,
-        filename: str,
-    ) -> tuple[str, VisualAssetMetadata, dict]:
-        """
-        Upload a visual asset to Supabase Storage with cleanup on failure.
+        filename: str = "image",
+    ) -> VisualAssetUploadResult:
+        """Upload or reuse a visual asset; only newly uploaded objects are cleaned up."""
+        if mime_type not in ALLOWED_MIME_TYPES:
+            raise ValueError(f"Unsupported MIME type: {mime_type}")
+        if not file_bytes or len(file_bytes) > MAX_FILE_SIZE:
+            raise ValueError("Image is empty or exceeds the 10 MB limit")
 
-        Returns:
-            Tuple of (storage_path, metadata, asset_record).
-        """
-        client = self._get_client()
-
-        # Strip EXIF
         clean_bytes = self.strip_exif(file_bytes, mime_type)
-
-        # Extract metadata
         metadata = self.extract_extended_metadata(clean_bytes, mime_type)
+        existing = self.get_asset_by_checksum(org_id, metadata.checksum)
+        if existing:
+            return self._upload_result(existing, metadata, created=False)
 
-        # Generate storage path: org_id/uuid.ext
-        ext = ALLOWED_MIME_TYPES[mime_type]
+        client = self._get_client()
         asset_id = uuid4()
-        storage_path = f"{org_id}/{asset_id}{ext}"
-
-        # Track cleanup state
-        uploaded_to_storage = False
-        created_asset_record = False
-
+        storage_path = f"{org_id}/{asset_id}{ALLOWED_MIME_TYPES[mime_type]}"
+        bucket = client.storage.from_("visual-assets")
+        uploaded = False
+        record_creation_attempted = False
         try:
-            # Upload to Supabase Storage
-            bucket = client.storage.from_("visual-assets")
-            try:
-                bucket.upload(
-                    path=storage_path,
-                    file=clean_bytes,
-                    file_options={
-                        "content-type": mime_type,
-                        "cache-control": "3600",
-                    },
-                )
-                uploaded_to_storage = True
-            except Exception as e:
-                # Check if it's a duplicate (same checksum)
-                if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
-                    # Try to get existing asset
-                    existing = self.get_asset_by_checksum(org_id, metadata.checksum)
-                    if existing:
-                        return existing.storage_path, metadata, existing
-                raise RuntimeError(f"Failed to upload to storage: {e}")
-
-            # Create asset record in database
-            asset_record = self.create_asset_record(
-                org_id=org_id,
-                user_id=user_id,
-                storage_path=storage_path,
-                mime_type=mime_type,
-                metadata=metadata,
+            bucket.upload(
+                path=storage_path,
+                file=clean_bytes,
+                file_options={"content-type": mime_type, "cache-control": "3600", "upsert": "false"},
             )
-
-            if not asset_record:
-                raise RuntimeError("Failed to create asset record in database")
-
-            created_asset_record = True
-
-            return storage_path, metadata, asset_record
-
-        except Exception:
-            # Cleanup on failure
-            try:
-                if uploaded_to_storage:
-                    bucket = client.storage.from_("visual-assets")
+            uploaded = True
+            record_creation_attempted = True
+            asset_record = self.create_asset_record(
+                org_id=org_id, user_id=user_id, storage_path=storage_path,
+                mime_type=mime_type, metadata=metadata,
+            )
+            actual_id = UUID(str(asset_record["id"]))
+            actual_path = asset_record["storage_path"]
+            created = actual_id == asset_id and actual_path == storage_path
+            if not created:
+                # A concurrent request won the checksum race. Remove only this request's object.
+                try:
                     bucket.remove([storage_path])
-            except Exception as cleanup_error:
-                logger.warning("storage_cleanup_failed", extra={"path": storage_path, "error": str(cleanup_error)})
-
-            try:
-                if created_asset_record:
-                    # Try to delete the asset record if we can identify it
-                    # We'll use the checksum to find it
-                    existing = self.get_asset_by_checksum(org_id, metadata.checksum)
-                    if existing:
-                        client = self._get_client()
-                        client.table("visual_assets").delete().eq("id", existing["id"]).eq("org_id", str(org_id)).execute()
-            except Exception as cleanup_error:
-                logger.warning("asset_record_cleanup_failed", extra={"error": str(cleanup_error)})
-
-            # Re-raise the original exception
+                except Exception as cleanup_error:
+                    logger.exception("visual_asset_race_object_cleanup_failed", extra={"path": storage_path})
+                    raise RuntimeError(f"Failed to remove duplicate-race storage object {storage_path}") from cleanup_error
+                return self._upload_result(asset_record, metadata, created=False)
+            return self._upload_result(asset_record, metadata, created=True)
+        except Exception:
+            if uploaded:
+                try:
+                    # The guarded RPC distinguishes an uncreated object from a DB row
+                    # that is linked/shared. Never delete storage if authorization is uncertain.
+                    removed = self.cleanup_new_asset(org_id, asset_id, storage_path, user_id) if record_creation_attempted else False
+                    if not removed:
+                        bucket.remove([storage_path])
+                except Exception:
+                    logger.exception("visual_asset_upload_cleanup_failed", extra={"path": storage_path})
             raise
 
+    @staticmethod
+    def _upload_result(asset_record: dict, metadata: VisualAssetMetadata, created: bool) -> VisualAssetUploadResult:
+        if not isinstance(asset_record, dict) or not asset_record.get("id") or not asset_record.get("storage_path"):
+            raise RuntimeError("Visual asset record is missing its ID or storage path")
+        return VisualAssetUploadResult(
+            asset_id=UUID(str(asset_record["id"])),
+            storage_path=asset_record["storage_path"],
+            metadata=metadata,
+            asset_record=asset_record,
+            created=created,
+        )
+
     def get_asset_by_checksum(self, org_id: UUID, checksum: str) -> Optional[dict]:
-        """Get existing asset by checksum (for deduplication)."""
-        client = self._get_client()
-        try:
-            response = client.table("visual_assets").select("*").eq("org_id", str(org_id)).eq("checksum", checksum).execute()
-            if response.data:
-                return response.data[0]
-        except Exception:
-            pass
-        return None
+        """Get an existing asset; database errors are not treated as cache misses."""
+        response = (
+            self._get_client().table("visual_assets").select("*")
+            .eq("org_id", str(org_id)).eq("checksum", checksum).limit(1).execute()
+        )
+        return response.data[0] if response.data else None
 
     def create_asset_record(
-        self,
-        org_id: UUID,
-        user_id: UUID,
-        storage_path: str,
-        mime_type: str,
-        metadata: VisualAssetMetadata,
+        self, org_id: UUID, user_id: UUID, storage_path: str,
+        mime_type: str, metadata: VisualAssetMetadata,
     ) -> dict:
-        """Create visual asset record in database via RPC."""
+        """Create through the actor-aware RPC and fetch the resulting row."""
         client = self._get_client()
         try:
             response = client.rpc("create_visual_asset", {
                 "_org_id": str(org_id),
+                "_actor_user_id": str(user_id),
                 "_storage_path": storage_path,
                 "_mime_type": mime_type,
                 "_width": metadata.width,
@@ -356,48 +341,75 @@ class VisualAssetService:
                     "perceptual_hash": metadata.perceptual_hash,
                 },
             }).execute()
-            if response.data:
-                return response.data
-        except Exception as e:
-            logger.error("create_asset_record_failed", extra={"error": str(e)})
-        return None
+            raw_id = response.data
+            if isinstance(raw_id, list):
+                raw_id = raw_id[0] if raw_id else None
+            if isinstance(raw_id, dict):
+                raw_id = raw_id.get("create_visual_asset") or raw_id.get("id")
+            if not raw_id:
+                raise ValueError("create_visual_asset returned an empty UUID")
+            asset_id = UUID(str(raw_id))
+            row = (
+                client.table("visual_assets").select("*")
+                .eq("id", str(asset_id)).eq("org_id", str(org_id)).limit(1).execute()
+            )
+            if not row.data:
+                raise LookupError(f"Created visual asset {asset_id} could not be fetched")
+            required = {"id", "org_id", "storage_path", "mime_type", "width", "height", "checksum", "metadata"}
+            missing = required.difference(row.data[0])
+            if missing:
+                raise ValueError(f"Visual asset row is missing fields: {sorted(missing)}")
+            return row.data[0]
+        except Exception as exc:
+            raise RuntimeError(f"Failed to create/fetch visual asset record: {exc}") from exc
+
+    def cleanup_new_asset(self, org_id: UUID, asset_id: UUID, storage_path: str, user_id: UUID) -> bool:
+        """Atomically delete only an unlinked asset owned by this org, then its object."""
+        try:
+            response = self._get_client().rpc("cleanup_new_visual_asset", {
+                "_org_id": str(org_id),
+                "_asset_id": str(asset_id),
+                "_storage_path": storage_path,
+                "_actor_user_id": str(user_id),
+            }).execute()
+            removed_path = response.data
+            if isinstance(removed_path, list):
+                removed_path = removed_path[0] if removed_path else None
+            if isinstance(removed_path, dict):
+                removed_path = removed_path.get("cleanup_new_visual_asset")
+            if removed_path:
+                self._get_client().storage.from_("visual-assets").remove([removed_path])
+                return True
+            return False
+        except Exception as exc:
+            raise RuntimeError(f"Safe cleanup refused or failed for visual asset {asset_id}: {exc}") from exc
 
     def get_signed_url(self, storage_path: str, expires_in: int = 3600) -> str:
-        """Generate a signed URL for accessing the asset."""
-        client = self._get_client()
+        """Generate a non-empty signed URL or raise."""
         try:
-            response = client.storage.from_("visual-assets").create_signed_url(
-                path=storage_path,
-                expires_in=expires_in,
+            response = self._get_client().storage.from_("visual-assets").create_signed_url(
+                path=storage_path, expires_in=expires_in,
             )
-            if response and "signedURL" in response:
-                return response["signedURL"]
-        except Exception as e:
-            logger.error("signed_url_failed", extra={"error": str(e), "path": storage_path})
-        return ""
+            signed_url = None
+            if isinstance(response, dict):
+                signed_url = response.get("signedURL") or response.get("signedUrl")
+            if not isinstance(signed_url, str) or not signed_url.strip():
+                raise ValueError("Storage returned no signed URL")
+            return signed_url
+        except Exception as exc:
+            raise RuntimeError(f"Failed to create signed URL for {storage_path}: {exc}") from exc
 
     def delete_asset(self, org_id: UUID, asset_id: UUID) -> bool:
-        """Delete a visual asset from storage and database."""
-        client = self._get_client()
-        try:
-            # Get asset record first
-            response = client.table("visual_assets").select("storage_path").eq("id", str(asset_id)).eq("org_id", str(org_id)).execute()
-            if not response.data:
-                return False
-
-            storage_path = response.data[0]["storage_path"]
-
-            # Delete from storage
-            bucket = client.storage.from_("visual-assets")
-            bucket.remove([storage_path])
-
-            # Delete from database (cascades to findings via FK)
-            client.table("visual_assets").delete().eq("id", str(asset_id)).eq("org_id", str(org_id)).execute()
-
-            return True
-        except Exception as e:
-            logger.error("delete_asset_failed", extra={"error": str(e), "asset_id": str(asset_id)})
+        """Delete only an unlinked asset through the guarded cleanup RPC."""
+        response = (
+            self._get_client().table("visual_assets").select("storage_path,uploaded_by")
+            .eq("id", str(asset_id)).eq("org_id", str(org_id)).limit(1).execute()
+        )
+        if not response.data:
             return False
+        return self.cleanup_new_asset(
+            org_id, asset_id, response.data[0]["storage_path"], UUID(response.data[0]["uploaded_by"])
+        )
 
 
 # Global instance

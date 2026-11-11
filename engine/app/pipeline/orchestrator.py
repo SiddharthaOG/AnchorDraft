@@ -605,19 +605,16 @@ class ReviewOrchestrator:
                 raw_model_count=0,
                 dropped_model_count=0,
             )
-            if asset_ids and visual_guidelines:
-                try:
-                    visual_result = await run_visual_analysis(
-                        asset_ids=asset_ids,
-                        revision_text=pipeline_input.revision_text,
-                        purpose=pipeline_input.purpose,
-                        channel=pipeline_input.channel,
-                        visual_guidelines=visual_guidelines,
-                        approved_logo_hashes=visual_guidelines.get("logo", {}).get("approved_hashes", []) if visual_guidelines else [],
-                    )
-                except Exception as e:
-                    logger.warning("visual_analysis_failed", extra={"error": str(e)})
-                    # Continue with empty visual result
+            if asset_ids:
+                visual_result = await run_visual_analysis(
+                    asset_ids=asset_ids,
+                    revision_text=pipeline_input.revision_text,
+                    purpose=pipeline_input.purpose,
+                    channel=pipeline_input.channel,
+                    visual_guidelines=visual_guidelines,
+                    org_id=UUID(pipeline_input.org_id),
+                    approved_logo_hashes=visual_guidelines.get("logo", {}).get("approved_hashes", []) if visual_guidelines else [],
+                )
 
             # Visual findings are kept as-is (they have asset_id and region, not quote/offsets)
             # They will be passed directly to the validator which now handles visual candidates

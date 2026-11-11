@@ -75,10 +75,13 @@ class SupabaseClient:
         response = client.table("contents").select("*").eq("id", content_id).execute()
         return response.data[0] if response.data else None
 
-    def get_visual_asset(self, asset_id: str) -> dict | None:
+    def get_visual_asset(self, asset_id: str, org_id: str | None = None) -> dict | None:
         """Get a visual asset by ID."""
         client = self._get_client()
-        response = client.table("visual_assets").select("*").eq("id", asset_id).execute()
+        query = client.table("visual_assets").select("*").eq("id", asset_id)
+        if org_id is not None:
+            query = query.eq("org_id", org_id)
+        response = query.limit(1).execute()
         return response.data[0] if response.data else None
 
     def create_review(
@@ -208,7 +211,7 @@ class SupabaseClient:
                 "_actor_user_id": actor_user_id,
             }).execute()
         except Exception as e:
-            raise RuntimeError(f"Failed to link visual asset to content: {e}")
+            raise RuntimeError(f"Failed to link visual asset to content: {e}") from e
 
 
 # Global client instance

@@ -57,42 +57,39 @@ class VisualAnalyzer:
         self.asset_service = get_visual_asset_service()
         self.supabase = get_supabase_client()
 
-    async def load_visual_assets_for_review(self, revision_id: UUID) -> List[dict]:
+    async def load_visual_assets_for_review(self, revision_id: UUID, org_id: UUID) -> List[dict]:
         """Load visual assets explicitly associated with a revision.
 
         Uses the revision-specific RPC to retrieve only assets explicitly linked
         to this revision (or its parent content), enforcing organization isolation.
         """
         try:
-            # First get the revision to find the org_id
-            revision = self.supabase.get_revision(str(revision_id))
-            if not revision:
-                return []
-            org_id = revision["org_id"]
-
-            # Call the revision-specific RPC that enforces:
-            # - Revision exists and belongs to the organization
-            # - Assets are explicitly linked to this revision
-            # - Organization isolation is enforced
-            import asyncio
-            response = await asyncio.to_thread(
-                lambda: self.supabase._get_client().rpc(
+            def fetch_assets():
+                revision = self.supabase.get_revision(str(revision_id))
+                if not revision:
+                    return []
+                content = self.supabase.get_content(str(revision["content_id"]))
+                if not content or str(content.get("org_id")) != str(org_id):
+                    raise ValueError("Revision does not belong to the expected organization")
+                return self.supabase._get_client().rpc(
                     "get_visual_assets_for_revision",
                     {"_revision_id": str(revision_id), "_org_id": str(org_id)},
                 ).execute()
-            )
-
+            response = await asyncio.to_thread(fetch_assets)
+            if isinstance(response, list):
+                return response
             return response.data or []
         except Exception as e:
             logger.error("load_visual_assets_for_review_failed", extra={"revision_id": str(revision_id), "error": str(e)})
             # Don't silently return empty list on failure - propagate the error
             raise
 
-    async def load_asset_bytes(self, asset_id: UUID) -> tuple[bytes, str, VisualAssetMetadata]:
+    async def load_asset_bytes(self, asset_id: UUID, org_id: UUID) -> tuple[bytes, str, VisualAssetMetadata]:
         """Load asset bytes and metadata from storage.
 
         Args:
             asset_id: UUID of the visual asset to load.
+            org_id: Organization ID for authorization check.
 
         Returns:
             Tuple of (file_bytes, mime_type, metadata).
@@ -101,36 +98,49 @@ class VisualAnalyzer:
             ValueError: If asset not found or access denied.
             RuntimeError: If storage download fails.
         """
-        asset_record = self.supabase.get_visual_asset(str(asset_id))
+        asset_record = await asyncio.to_thread(
+            self.supabase.get_visual_asset, str(asset_id), str(org_id)
+        )
         if not asset_record:
             raise ValueError(f"Visual asset {asset_id} not found")
 
-        storage_path = asset_record["storage_path"]
-        mime_type = asset_record["mime_type"]
+        # Verify asset belongs to the expected organization
+        storage_path = asset_record.get("storage_path")
+        mime_type = asset_record.get("mime_type")
+        if not storage_path or mime_type not in {"image/png", "image/jpeg", "image/webp"}:
+            raise ValueError(f"Visual asset {asset_id} has invalid storage metadata")
 
-        # Download from storage using service-role client
-        import asyncio
-        client = self.supabase._get_client()
+        # Download from storage using service-role client off the event loop.
         try:
             file_bytes = await asyncio.to_thread(
-                lambda: self.supabase._get_client().storage.from_("visual-assets").download(asset_record["storage_path"])
+                lambda: self.supabase._get_client().storage.from_("visual-assets").download(storage_path)
             )
+            if not isinstance(file_bytes, (bytes, bytearray)) or not file_bytes:
+                raise ValueError("Storage returned empty or invalid image bytes")
         except Exception as e:
             logger.error("asset_download_failed", extra={"asset_id": str(asset_id), "error": str(e)})
-            raise RuntimeError(f"Failed to download asset: {e}")
+            raise RuntimeError(f"Failed to download asset {asset_id}: {e}") from e
 
         # Build metadata from asset record
-        metadata = VisualAssetMetadata(
-            width=asset_record["width"],
-            height=asset_record["height"],
-            mime_type=mime_type,
-            checksum=asset_record["checksum"],
-            palette=asset_record.get("metadata", {}).get("palette"),
-            dominant_colors=asset_record.get("metadata", {}).get("dominant_colors"),
-            perceptual_hash=asset_record.get("metadata", {}).get("perceptual_hash"),
-        )
+        raw_metadata = asset_record.get("metadata")
+        if not isinstance(raw_metadata, dict):
+            raise ValueError(f"Visual asset {asset_id} has malformed metadata")
+        try:
+            metadata = VisualAssetMetadata(
+                width=int(asset_record["width"]),
+                height=int(asset_record["height"]),
+                mime_type=mime_type,
+                checksum=str(asset_record["checksum"]),
+                palette=raw_metadata.get("palette"),
+                dominant_colors=raw_metadata.get("dominant_colors"),
+                perceptual_hash=raw_metadata.get("perceptual_hash"),
+            )
+            if metadata.width <= 0 or metadata.height <= 0 or not metadata.checksum:
+                raise ValueError("invalid dimensions or checksum")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"Visual asset {asset_id} has malformed metadata: {exc}") from exc
 
-        return file_bytes, mime_type, metadata
+        return bytes(file_bytes), mime_type, metadata
 
     async def analyze_assets(
         self,
@@ -139,6 +149,7 @@ class VisualAnalyzer:
         purpose: str,
         channel: str,
         visual_guidelines: dict,
+        org_id: UUID,
         approved_logo_hashes: List[str] = None,
     ) -> VisualAnalysisResult:
         """
@@ -150,6 +161,7 @@ class VisualAnalyzer:
             purpose: Creator's stated purpose.
             channel: Content channel.
             visual_guidelines: Parsed visual guidelines from brand kit.
+            org_id: Organization ID supplied by the claimed review pipeline.
             approved_logo_hashes: List of approved logo perceptual hashes.
 
         Returns:
@@ -173,7 +185,7 @@ class VisualAnalyzer:
         assets_data = []
         for asset_id in asset_ids:
             try:
-                file_bytes, mime_type, metadata = await self.load_asset_bytes(asset_id)
+                file_bytes, mime_type, metadata = await self.load_asset_bytes(asset_id, org_id)
                 assets_data.append({
                     "asset_id": asset_id,
                     "file_bytes": file_bytes,
@@ -182,8 +194,7 @@ class VisualAnalyzer:
                 })
             except Exception as e:
                 logger.error("asset_load_failed", extra={"asset_id": str(asset_id), "error": str(e)})
-                warnings.append(f"Failed to load asset {asset_id}: {e}")
-                continue
+                raise ValueError(f"Failed to load asset {asset_id}: {e}") from e
 
         # Run deterministic checks on all assets
         guidelines = parse_visual_guidelines(visual_guidelines)
@@ -319,6 +330,7 @@ async def run_visual_analysis(
     purpose: str,
     channel: str,
     visual_guidelines: dict,
+    org_id: UUID,
     approved_logo_hashes: List[str] = None,
 ) -> VisualAnalysisResult:
     """Convenience function to run visual analysis."""
@@ -329,5 +341,6 @@ async def run_visual_analysis(
         purpose=purpose,
         channel=channel,
         visual_guidelines=visual_guidelines,
+        org_id=org_id,
         approved_logo_hashes=approved_logo_hashes,
     )

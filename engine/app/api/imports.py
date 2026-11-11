@@ -1,13 +1,16 @@
 """Text and visual asset import API endpoints."""
 import io
 import warnings
+import logging
 from fastapi import APIRouter, Depends, File, UploadFile, status, Form
 from uuid import UUID
 
 from app.auth.dependencies import require_creator_or_owner, require_owner
 from app.core.config import get_settings
 from app.core.errors import TooLargeError, UnsupportedMediaTypeError, ValidationError
-from app.visual import get_visual_asset_service, VisualAssetMetadata
+from app.visual import get_visual_asset_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -208,61 +211,49 @@ async def import_visual(
     if not is_valid:
         raise ValidationError(error_msg)
 
-    # Strip EXIF and extract metadata
-    clean_bytes = asset_service.strip_exif(file_bytes, content_type)
-    metadata = asset_service.extract_extended_metadata(clean_bytes, content_type)
-
-    # Upload to storage and create asset record in one atomic operation
+    # The asset service owns EXIF stripping, canonical bytes, and checksum generation.
+    upload_result = None
     try:
-        storage_path, metadata, asset_record = asset_service.upload_asset(
-            org_id=user.org_id,
-            user_id=user.user_id,
-            file_bytes=clean_bytes,
+        upload_result = asset_service.upload_asset(
+            org_id=UUID(str(user.org_id)),
+            user_id=UUID(str(user.user_id)),
+            file_bytes=file_bytes,
             mime_type=content_type,
             filename=file.filename or "image",
         )
 
-        if not asset_record:
-            raise ValidationError("Failed to create asset record")
-
-        asset_id = asset_record.get("id") or asset_record.get("id")
-
-        # Link asset to content/revision
+        signed_url = asset_service.get_signed_url(upload_result.storage_path)
         from app.auth.supabase import get_supabase_client
-        supabase = get_supabase_client()
-        try:
-            supabase.link_visual_asset_to_content(
-                visual_asset_id=str(asset_id),
-                content_id=str(content_id),
-                revision_id=str(revision_id),
-                actor_user_id=user.user_id,
-            )
-        except Exception as e:
-            raise ValidationError(f"Failed to link asset to content: {e}")
+        get_supabase_client().link_visual_asset_to_content(
+            visual_asset_id=str(upload_result.asset_id),
+            content_id=str(content_id),
+            revision_id=str(revision_id),
+            actor_user_id=str(user.user_id),
+        )
 
-        # Generate signed URL for immediate access
-        signed_url = asset_service.get_signed_url(storage_path)
-
+        metadata = upload_result.metadata
         return {
-            "asset_id": str(asset_id),
+            "asset_id": str(upload_result.asset_id),
             "width": metadata.width,
             "height": metadata.height,
-            "mime_type": content_type,
+            "mime_type": metadata.mime_type,
             "checksum": metadata.checksum,
             "signed_url": signed_url,
             "expires_in": 3600,
         }
-
-    except ValidationError:
+    except Exception:
+        if upload_result is not None and upload_result.created:
+            try:
+                asset_service.cleanup_new_asset(
+                    org_id=UUID(str(user.org_id)),
+                    asset_id=upload_result.asset_id,
+                    storage_path=upload_result.storage_path,
+                    user_id=UUID(str(user.user_id)),
+                )
+            except Exception:
+                logger.exception(
+                    "visual_upload_cleanup_failed",
+                    extra={"asset_id": str(upload_result.asset_id), "content_id": str(content_id)},
+                )
+        logger.exception("visual_upload_failed", extra={"content_id": str(content_id)})
         raise
-    except TooLargeError:
-        raise
-    except UnsupportedMediaTypeError:
-        raise
-    except RuntimeError as e:
-        # Handle storage/upload errors
-        raise ValidationError(f"Upload failed: {e}")
-    except Exception as e:
-        # Any other unexpected error
-        logger.error("visual_upload_failed", extra={"error": str(e), "content_id": str(content_id)})
-        raise ValidationError(f"Upload failed: {e}")

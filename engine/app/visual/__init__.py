@@ -3,6 +3,7 @@
 from app.visual.asset_service import (
     VisualAssetService,
     VisualAssetMetadata,
+    VisualAssetUploadResult,
     get_visual_asset_service,
 )
 from app.visual.deterministic import (
@@ -32,6 +33,7 @@ __all__ = [
     # Asset service
     "VisualAssetService",
     "VisualAssetMetadata",
+    "VisualAssetUploadResult",
     "get_visual_asset_service",
     # Deterministic
     "VisualGuideline",
