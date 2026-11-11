@@ -601,6 +601,21 @@ describe('ContentDetail', () => {
       expect(mockCreateReviewPreview).toHaveBeenCalledWith('revision-1');
     });
 
+    it('shows an actionable error instead of silently ignoring Start Review when no revision is loaded', { timeout: 15000 }, async () => {
+      mockGetLatestRevision.mockResolvedValueOnce(null);
+      mockGetRevisions.mockResolvedValueOnce([]);
+      mockGetLatestReviewForRevision.mockResolvedValue(null);
+
+      await renderAndWaitForLoad(<ContentDetail />);
+      fireEvent.click(screen.getByRole('button', { name: 'Start Review' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'This content has no loaded revision yet. Reload the content and try again.',
+      );
+      expect(mockCreateReviewPreview).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Start Review' })).toBeEnabled();
+    });
+
     it('shows preview API failures beside Start Review so a fast 4xx is not mistaken for an inert button', { timeout: 15000 }, async () => {
       mockGetLatestReviewForRevision.mockResolvedValue(null);
       mockCreateReviewPreview.mockRejectedValueOnce(new Error('Request validation failed: body.revision_id: invalid UUID'));

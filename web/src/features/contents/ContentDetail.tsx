@@ -804,12 +804,23 @@ const startPolling = useCallback(() => {
   }, [content, loadContent]);
 
   const handleStartReview = async (revisionId?: string) => {
-    const targetRevisionId = revisionId ?? latestRevision?.id;
-    if (!targetRevisionId || startingReviewRef.current) return;
+    if (startingReviewRef.current) return;
+
     startingReviewRef.current = true;
     setStartingReview(true);
     setReviewActionError(null);
     setToastError(null);
+
+    // Prefer the explicitly selected revision, then fall back to the loaded
+    // revision objects. Never silently return from a visible Start Review action.
+    const targetRevisionId = revisionId ?? selectedRevisionId ?? selectedRevision?.id ?? latestRevision?.id;
+    if (!targetRevisionId) {
+      setReviewActionError('This content has no loaded revision yet. Reload the content and try again.');
+      setStartingReview(false);
+      startingReviewRef.current = false;
+      return;
+    }
+
     try {
       const preview = await createReviewPreview(targetRevisionId);
       setReviewPreview(preview);
