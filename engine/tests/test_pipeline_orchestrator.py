@@ -35,6 +35,35 @@ from app.llm.prompt_builder import RuleData, FactData
 
 
 # ============================================================================
+# Confirmed preview loading contract
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_load_confirmed_preview_includes_review_requester():
+    """The pipeline validates preview ownership against the parent review."""
+    from app.pipeline.orchestrator import ReviewOrchestrator
+
+    review_id = str(uuid4())
+    preview_id = str(uuid4())
+    expected = {
+        "id": preview_id,
+        "org_id": str(uuid4()),
+        "user_id": str(uuid4()),
+        "review_requested_by": str(uuid4()),
+    }
+    connection = AsyncConnectionMock(fetchrow_return=expected)
+    orchestrator = ReviewOrchestrator.__new__(ReviewOrchestrator)
+    orchestrator.db_pool = DatabasePoolMock(connection)
+
+    result = await orchestrator._load_confirmed_preview(review_id, preview_id)
+
+    assert result["review_requested_by"] == expected["review_requested_by"]
+    query = connection.fetchrow.await_args.args[0]
+    assert "r.requested_by AS review_requested_by" in query
+    assert "JOIN reviews r ON r.preview_id=p.id" in query
+
+
+# ============================================================================
 # Test Fixtures and Helpers
 # ============================================================================
 

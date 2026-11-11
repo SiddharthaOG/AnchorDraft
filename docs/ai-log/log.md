@@ -285,3 +285,26 @@ Supabase returns the `approved_facts.valid_until` DATE column as an ISO date str
 ### Remaining live verification
 
 The code fix is verified locally, but a new Render staging deployment and an authenticated Preview → confirm → Gemini processing run are still required to prove the live pipeline. Permissions-Policy feature warnings are emitted by the hosted response headers/browser compatibility and are not the cause of the preview failure.
+
+
+## 2026-11-12 — Background Pipeline KeyError: Include Review Requester in Preview Query
+
+### Root cause
+
+The user's first live confirmed review reached the background pipeline and failed with `KeyError`. `ReviewOrchestrator._load_confirmed_preview()` selected only `p.*` from `review_previews`, but `run_pipeline()` then validated ownership using `preview_record["review_requested_by"]`. The parent review's `requested_by` field was never selected, so the dictionary lookup failed deterministically after confirmation.
+
+### Fix
+
+- Updated the confirmed-preview query to select `p.*` plus `r.requested_by AS review_requested_by` from the joined parent review.
+- Added a regression test asserting that the selected row contract includes `review_requested_by` and that the join is present.
+- Changed the top-level `pipeline_failed` logger to `logger.exception()` so future unexpected pipeline failures include a traceback while preserving the existing safe, type-only error returned to users. No prompt, source text, PII, image bytes, or reverse map is logged.
+
+### Verification
+
+- Focused orchestrator suite: **19 passed, 4 skipped**.
+- Full backend suite: **704 passed, 4 skipped, 2 warnings**.
+- The previous staging build is live on Render; this fix still requires a new deployment and another real confirmed review to verify provider processing and persisted findings.
+
+### State checkpoint
+
+As of this entry, Improvement 2's live path has successfully completed `POST /v1/reviews/preview` (201 Created) and `POST /v1/reviews/confirm` (202 Accepted) on staging. The confirmed background job then failed on the missing requester field above. The prior date-string normalization fix is already live. Preserve this working preview/confirmation path; do not replace it with a direct review-start path or bypass consent, policy, or preview integrity checks.

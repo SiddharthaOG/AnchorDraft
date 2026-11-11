@@ -286,7 +286,8 @@ class ReviewOrchestrator:
         async with pool.pool.acquire() as conn:
             return await conn.fetchrow(
                 """
-                SELECT p.* FROM review_previews p
+                SELECT p.*, r.requested_by AS review_requested_by
+                FROM review_previews p
                 JOIN reviews r ON r.preview_id=p.id
                 WHERE r.id=$1 AND p.id=$2 AND p.review_id=r.id
                   AND p.consumed_at IS NOT NULL
@@ -924,7 +925,7 @@ class ReviewOrchestrator:
 
         except Exception as e:
             elapsed = time.time() - start_time
-            logger.error(
+            logger.exception(
                 "pipeline_failed",
                 extra={"review_id": review_id, "elapsed_ms": int((time.time() - start_time) * 1000), "error_type": type(e).__name__},
             )
