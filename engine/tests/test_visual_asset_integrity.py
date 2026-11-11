@@ -398,6 +398,35 @@ async def test_visual_pipeline_failure_uses_claim_token_failure_path(monkeypatch
     obj._persist_failure.assert_awaited_once_with(review_id, "asset download failed", token)
 
 
+@pytest.mark.asyncio
+async def test_visual_guidelines_lookup_failure_fails_closed_and_persists_failure():
+    from app.pipeline.orchestrator import ReviewOrchestrator
+
+    review_id, token, org_id, revision_id = str(uuid4()), uuid4(), str(uuid4()), str(uuid4())
+    pipeline_input = SimpleNamespace(
+        revision_id=revision_id, org_id=org_id, revision_text="draft",
+        kit_id="kit", purpose="purpose", channel="web",
+    )
+    obj = ReviewOrchestrator.__new__(ReviewOrchestrator)
+    obj._claim_review = AsyncMock(return_value=(True, token))
+    obj._load_review_data = AsyncMock(return_value=pipeline_input)
+    obj.loader = MagicMock()
+    obj.loader.load_rules_and_facts.return_value = ([], [])
+    obj.supabase = MagicMock()
+    obj.supabase._get_client.return_value.table.return_value.select.return_value.eq.return_value.execute.side_effect = RuntimeError(
+        "database unavailable"
+    )
+    obj._load_visual_asset_ids = AsyncMock(return_value=[uuid4()])
+    obj._persist_failure = AsyncMock()
+
+    output = await obj.run_pipeline(review_id)
+
+    assert output.error == "Failed to load visual guidelines for review"
+    obj._persist_failure.assert_awaited_once_with(
+        review_id, "Failed to load visual guidelines for review", token
+    )
+
+
 def test_storage_upload_failure_does_not_attempt_database_or_storage_cleanup():
     service, client, bucket = service_with_client()
     org_id, user_id = uuid4(), uuid4()

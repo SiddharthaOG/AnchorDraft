@@ -574,17 +574,35 @@ class ReviewOrchestrator:
             # 3. Load rules and facts
             rules, facts = self.loader.load_rules_and_facts(pipeline_input.kit_id)
 
-            # 3b. Load visual guidelines from kit (optional - handle missing Supabase)
-            visual_guidelines = {}
-            try:
-                kit = self.supabase._get_client().table("brand_kits").select("visual_guidelines").eq("id", pipeline_input.kit_id).execute()
-                visual_guidelines = kit.data[0].get("visual_guidelines", {}) if kit.data else {}
-            except Exception as e:
-                logger.warning("visual_guidelines_load_failed", extra={"kit_id": pipeline_input.kit_id, "error": str(e)})
-                visual_guidelines = {}
-
-            # 3c. Load visual assets associated with this revision
+            # 3b. Load visual assets associated with this revision.
             asset_ids = await self._load_visual_asset_ids(pipeline_input.revision_id, pipeline_input.org_id)
+
+            # 3c. Visual assets require the kit's guidelines. A failed lookup must
+            # fail the review rather than silently analyze against an empty policy.
+            visual_guidelines = {}
+            if asset_ids:
+                try:
+                    kit = await asyncio.to_thread(
+                        lambda: self.supabase._get_client()
+                        .table("brand_kits")
+                        .select("visual_guidelines")
+                        .eq("id", pipeline_input.kit_id)
+                        .execute()
+                    )
+                except Exception as e:
+                    logger.error(
+                        "visual_guidelines_load_failed",
+                        extra={"kit_id": pipeline_input.kit_id, "error": str(e)},
+                    )
+                    raise RuntimeError("Failed to load visual guidelines for review") from e
+
+                if not kit.data:
+                    raise RuntimeError(
+                        f"Brand kit {pipeline_input.kit_id} was not found while loading visual guidelines"
+                    )
+                visual_guidelines = kit.data[0].get("visual_guidelines") or {}
+                if not isinstance(visual_guidelines, dict):
+                    raise RuntimeError("Visual guidelines must be a JSON object")
 
             # 4. Extract offered keys
             model_offered_rules, model_offered_facts = self._extract_offered_keys(rules, facts)

@@ -1,4 +1,5 @@
 """Text and visual asset import API endpoints."""
+import asyncio
 import io
 import warnings
 import logging
@@ -206,15 +207,19 @@ async def import_visual(
     # Get visual asset service
     asset_service = get_visual_asset_service()
 
-    # Validate upload
-    is_valid, error_msg = asset_service.validate_upload(file_bytes, content_type)
+    # Image decoding, Storage calls, and Supabase RPCs are synchronous; keep
+    # them off the event loop while preserving the original exception path.
+    is_valid, error_msg = await asyncio.to_thread(
+        asset_service.validate_upload, file_bytes, content_type
+    )
     if not is_valid:
         raise ValidationError(error_msg)
 
     # The asset service owns EXIF stripping, canonical bytes, and checksum generation.
     upload_result = None
     try:
-        upload_result = asset_service.upload_asset(
+        upload_result = await asyncio.to_thread(
+            asset_service.upload_asset,
             org_id=UUID(str(user.org_id)),
             user_id=UUID(str(user.user_id)),
             file_bytes=file_bytes,
@@ -222,9 +227,12 @@ async def import_visual(
             filename=file.filename or "image",
         )
 
-        signed_url = asset_service.get_signed_url(upload_result.storage_path)
+        signed_url = await asyncio.to_thread(
+            asset_service.get_signed_url, upload_result.storage_path
+        )
         from app.auth.supabase import get_supabase_client
-        get_supabase_client().link_visual_asset_to_content(
+        await asyncio.to_thread(
+            get_supabase_client().link_visual_asset_to_content,
             visual_asset_id=str(upload_result.asset_id),
             content_id=str(content_id),
             revision_id=str(revision_id),
@@ -244,7 +252,8 @@ async def import_visual(
     except Exception:
         if upload_result is not None and upload_result.created:
             try:
-                asset_service.cleanup_new_asset(
+                await asyncio.to_thread(
+                    asset_service.cleanup_new_asset,
                     org_id=UUID(str(user.org_id)),
                     asset_id=upload_result.asset_id,
                     storage_path=upload_result.storage_path,
