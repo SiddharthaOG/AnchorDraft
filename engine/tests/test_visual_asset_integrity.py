@@ -182,7 +182,12 @@ def test_sql_migrations_enforce_required_database_contracts():
     review_sql = (root / "20261113000002_exact_visual_revision_evidence.sql").read_text(encoding="utf-8")
     lease_sql = (root / "20261107000001_review_lease.sql").read_text(encoding="utf-8")
     historical_visual_sql = (root / "20261112000002_update_engine_complete_review_for_visual.sql").read_text(encoding="utf-8")
+    security_sql = (root / "20261113000003_visual_rpc_service_role_only.sql").read_text(encoding="utf-8")
 
+    assert "revoke all on function public.get_visual_asset(uuid) from public, anon, authenticated, service_role" in security_sql.lower()
+    assert "revoke all on function public.get_visual_asset_signed_url(uuid, integer)" in security_sql.lower()
+    assert "revoke all on function public.list_visual_assets(uuid, integer, integer)" in security_sql.lower()
+    assert "revoke all on function public.get_visual_assets_for_content(uuid)" in security_sql.lower()
     assert "alter column quote drop not null" in base_visual_sql.lower()
     assert "alter column start_offset drop not null" in base_visual_sql.lower()
     assert "alter column end_offset drop not null" in base_visual_sql.lower()
