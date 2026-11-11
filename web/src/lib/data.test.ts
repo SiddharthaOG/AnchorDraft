@@ -127,6 +127,32 @@ describe('Data Access Layer', () => {
       expect(result).toEqual(mockResult);
     });
 
+    it('createRevision reports an unchanged body as a duplicate entry', async () => {
+      mockRpc.mockResolvedValueOnce({
+        data: null,
+        error: {
+          code: '23505',
+          message: 'duplicate_revision',
+          details: 'The submitted body is identical to the latest revision.',
+        },
+      });
+
+      await expect(createRevision('content-1', 'Unchanged body')).rejects.toThrow(
+        'Duplicate entry: this content is identical to the latest revision. Make a change before creating a new revision.',
+      );
+    });
+
+    it('createRevision keeps malformed body errors distinct from duplicates', async () => {
+      mockRpc.mockResolvedValueOnce({
+        data: null,
+        error: { code: 'P0001', message: 'validation:body' },
+      });
+
+      await expect(createRevision('content-1', '')).rejects.toThrow(
+        'Revision content must be between 1 and 20,000 characters.',
+      );
+    });
+
     it('recordDecision calls record_decision RPC with correct args', async () => {
       const mockResult = { decision_id: 'decision-1' };
       mockRpc.mockResolvedValueOnce({ data: [mockResult], error: null });

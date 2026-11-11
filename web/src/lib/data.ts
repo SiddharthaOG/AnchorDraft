@@ -666,6 +666,12 @@ export async function createRevision(
   });
 
   if (error) {
+    if (error.code === '23505' && error.message?.includes('duplicate_revision')) {
+      throw new Error('Duplicate entry: this content is identical to the latest revision. Make a change before creating a new revision.');
+    }
+    if (error.message === 'validation:body') {
+      throw new Error('Revision content must be between 1 and 20,000 characters.');
+    }
     throw new Error(`Failed to create revision: ${error.message}`);
   }
   return data[0] as CreateRevisionResult;
