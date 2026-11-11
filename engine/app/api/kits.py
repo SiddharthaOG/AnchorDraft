@@ -48,16 +48,9 @@ async def lint_kit(
     issues = []
     warnings = []
 
-    # Check: kit has at least one rule
-    if not rules:
-        issues.append({
-            "severity": "error",
-            "code": "EMPTY_KIT",
-            "ref_key": None,
-            "message": "Kit must have at least one rule",
-        })
-
-    # Validate all rules first (independently of check_kind)
+    # Validate all rules first, building a consistently validated collection
+    # of dictionary rules for all subsequent processing.
+    validated_rules = []
     for rule in rules:
         if not isinstance(rule, dict):
             issues.append({
@@ -144,6 +137,17 @@ async def lint_kit(
                             ),
                         })
 
+        # Add to validated collection for downstream use (only dict rules reach here)
+        validated_rules.append(rule)
+
+    # Check: kit has at least one valid (dictionary) rule
+    if not validated_rules:
+        issues.append({
+            "severity": "error",
+            "code": "EMPTY_KIT",
+            "ref_key": None,
+            "message": "Kit must have at least one valid rule",
+        })
 
     # Validate facts
     validated_facts = []
@@ -269,7 +273,8 @@ async def lint_kit(
     # Enforce documented limits (from REVIEW_ENGINE.md)
     # Limit: at most 100 phrases per rule, each at most 100 characters
     # Limit: at most 50 deterministic rules per kit
-    deterministic_rules_list = [r for r in rules if isinstance(r, dict) and r.get("check_kind") == "deterministic"]
+    # Use validated_rules for consistent, safe processing
+    deterministic_rules_list = [r for r in validated_rules if r.get("check_kind") == "deterministic"]
     if len(deterministic_rules_list) > 50:
         issues.append({
             "severity": "error",
@@ -279,9 +284,6 @@ async def lint_kit(
         })
 
     for rule in deterministic_rules_list:
-        if not isinstance(rule, dict):
-            continue
-
         config = rule.get("config")
         if not isinstance(config, dict):
             continue
@@ -374,7 +376,8 @@ async def lint_kit(
                         "message": f"Required disclosure rule {rule.get('rule_key')} exceeds 100 require_any terms (has {len(require_any)})",
                     })
 
-    # Calculate prompt size estimate (safely handle non-string guideline_text and non-dict rules/facts)
+    # Calculate prompt size estimate using validated_rules and validated_facts
+    # Safe to use .get() on validated dicts; non-strings handled by safe_len
     def safe_len(value):
         """Safely get length of a string value, returning 0 for non-strings."""
         if isinstance(value, str):
@@ -382,9 +385,9 @@ async def lint_kit(
         return 0
 
     total_chars = sum(
-        safe_len(r.get("guideline_text")) for r in rules if isinstance(r, dict)
+        safe_len(r.get("guideline_text")) for r in validated_rules
     ) + sum(
-        safe_len(f.get("statement")) + safe_len(f.get("source_note")) for f in facts if isinstance(f, dict)
+        safe_len(f.get("statement")) + safe_len(f.get("source_note")) for f in validated_facts
     )
     prompt_cap = 24000  # From REVIEW_ENGINE.md
 
@@ -396,9 +399,9 @@ async def lint_kit(
             "message": f"Kit exceeds prompt character cap ({total_chars} > {prompt_cap})",
         })
 
-    # Count rule types (safely handle non-dict rules)
-    llm_rules = sum(1 for r in rules if isinstance(r, dict) and r.get("check_kind") == "llm")
-    deterministic_rules = sum(1 for r in rules if isinstance(r, dict) and r.get("check_kind") == "deterministic")
+    # Count rule types using validated_rules for consistency
+    llm_rules = sum(1 for r in validated_rules if r.get("check_kind") == "llm")
+    deterministic_rules = sum(1 for r in validated_rules if r.get("check_kind") == "deterministic")
 
     ok = len(issues) == 0
 
@@ -413,8 +416,8 @@ async def lint_kit(
     ]
 
     stats = {
-        "rules": len(rules),
-        "facts": len(facts),
+        "rules": len(validated_rules),
+        "facts": len(validated_facts),
         "llm_rules": llm_rules,
         "deterministic_rules": deterministic_rules,
         "prompt_chars_estimate": total_chars,

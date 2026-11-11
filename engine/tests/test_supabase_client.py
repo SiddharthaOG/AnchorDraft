@@ -550,6 +550,77 @@ class TestKitLintMalformedInput:
         assert "INVALID_GUIDELINE_TEXT" in error_codes
         assert "INVALID_CONFIG" in error_codes
 
+    @pytest.mark.asyncio
+    async def test_lint_all_rules_malformed_triggers_empty_kit(self, mock_supabase, auth_user, kit_id):
+        """Test that a kit with only non-dict rules triggers EMPTY_KIT."""
+        from app.api.kits import lint_kit
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        # All rules are non-dict (malformed)
+        mock_supabase.get_kit_rules.return_value = [
+            "not a dict",
+            123,
+            None,
+        ]
+        mock_supabase.get_kit_facts.return_value = []
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        # Should have INVALID_RULE for each malformed entry
+        assert error_codes.count("INVALID_RULE") == 3
+        # Should also have EMPTY_KIT since no valid rules exist
+        assert "EMPTY_KIT" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_malformed_rules_with_valid_deterministic(self, mock_supabase, auth_user, kit_id):
+        """Test that malformed non-dict rules don't block valid deterministic rule processing."""
+        from app.api.kits import lint_kit
+
+        mock_supabase.get_kit.return_value = {
+            "id": str(kit_id),
+            "org_id": "org-123",
+            "name": "My Kit",
+            "status": "active",
+            "version": 1,
+        }
+        # Mix of non-dict and valid deterministic rule
+        mock_supabase.get_kit_rules.return_value = [
+            "not a dict",  # Malformed
+            {
+                "rule_key": "RULE-01",
+                "category": "terminology",
+                "severity": "medium",
+                "title": "Valid Rule",
+                "guideline_text": "Valid guideline",
+                "check_kind": "deterministic",
+                "config": {"check": "phrase_list", "phrases": ["bad phrase"]},
+                "needs_reviewer": False,
+            }
+        ]
+        mock_supabase.get_kit_facts.return_value = []
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert "ok" in result
+        assert "issues" in result
+        error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
+        # Should have INVALID_RULE for the non-dict entry
+        assert "INVALID_RULE" in error_codes
+        # Valid deterministic rule should not produce additional errors
+        # (it has valid config and guideline_text)
+        # Stats should reflect only the valid rule
+        assert result["stats"]["rules"] == 1
+        assert result["stats"]["deterministic_rules"] == 1
+
 
 class TestKitLintFactsMalformedInput:
     """Tests for lint endpoint handling of malformed facts."""
