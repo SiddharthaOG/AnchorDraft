@@ -52,8 +52,8 @@ from app.visual import (
     VisualGuideline,
     parse_visual_guidelines,
     VisualAnalysisResult,
+    VisualFindingCandidate,
 )
-from app.visual.deterministic import VisualFindingCandidate as VisualDetFindingCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -420,6 +420,8 @@ class ReviewOrchestrator:
         facts: list,
         model_offered_rules: set,
         model_offered_facts: set,
+        visual_deterministic_candidates: list = None,
+        visual_model_candidates: list = None,
     ) -> AggregateValidationResult:
         """Run citation validator on all candidates."""
         context = self.loader.load_validation_context(
@@ -452,6 +454,8 @@ class ReviewOrchestrator:
             deterministic_candidates,
             model_candidates,
             context,
+            visual_deterministic_candidates=visual_deterministic_candidates or [],
+            visual_model_candidates=visual_model_candidates or [],
         )
 
     async def _persist_results(
@@ -474,20 +478,28 @@ class ReviewOrchestrator:
         import json
         findings_json = []
         for f in validation_result.validated_findings:
-            findings_json.append({
+            finding_dict = {
                 "source": f.source,
                 "ref_key": f.ref_key,
                 "category": f.category,
                 "severity": f.severity,
-                "quote": f.quote,
-                "start_offset": f.start_offset,
-                "end_offset": f.end_offset,
                 "explanation": f.explanation,
                 "suggestion": f.suggestion,
                 "confidence": f.confidence,
                 "needs_human": f.needs_human,
                 "needs_reviewer": f.needs_reviewer,
-            })
+            }
+            # Add text-based evidence
+            if f.quote is not None:
+                finding_dict["quote"] = f.quote
+                finding_dict["start_offset"] = f.start_offset
+                finding_dict["end_offset"] = f.end_offset
+            # Add visual evidence
+            if f.asset_id is not None:
+                finding_dict["asset_id"] = str(f.asset_id)
+            if f.region is not None:
+                finding_dict["region"] = f.region
+            findings_json.append(finding_dict)
 
         findings_json = json.dumps(findings_json)
 
@@ -608,23 +620,11 @@ class ReviewOrchestrator:
                     logger.warning("visual_analysis_failed", extra={"error": str(e)})
                     # Continue with empty visual result
 
-            # Convert visual deterministic findings to pipeline format
-            visual_deterministic_candidates = []
-            for vf in visual_result.deterministic_findings:
-                visual_deterministic_candidates.append(VisualDetFindingCandidate(
-                    ref_key=vf.ref_key,
-                    quote=vf.quote if hasattr(vf, 'quote') else vf.explanation[:200],
-                    start_offset=vf.region.get('x', 0) * 1000 if hasattr(vf, 'region') else 0,
-                    end_offset=(vf.region.get('x', 0) + vf.region.get('w', 0)) * 1000 if hasattr(vf, 'region') else 1,
-                    explanation=vf.explanation,
-                    suggestion=vf.suggestion,
-                    rule_category=vf.category,
-                    severity=vf.severity,
-                    needs_reviewer=vf.needs_reviewer,
-                    confidence=vf.confidence,
-                ))
+            # Visual findings are kept as-is (they have asset_id and region, not quote/offsets)
+            # They will be passed directly to the validator which now handles visual candidates
+            visual_deterministic_candidates = list(visual_result.deterministic_findings)
 
-            # Combine deterministic candidates
+            # Combine deterministic candidates (text + visual)
             all_deterministic_candidates = deterministic_candidates + visual_deterministic_candidates
 
             # 6. Run model analysis (text + visual)
@@ -679,6 +679,7 @@ class ReviewOrchestrator:
                 warnings.extend(visual_result.warnings)
 
             # 7. Run validation
+            # 7. Run validation
             validation_result = await self._run_validation(
                 pipeline_input.revision_text,
                 all_deterministic_candidates,
@@ -687,6 +688,8 @@ class ReviewOrchestrator:
                 facts,
                 model_offered_rules=set([r.rule_key for r in rules if r.check_kind == "llm"]),
                 model_offered_facts=model_offered_facts,
+                visual_deterministic_candidates=visual_deterministic_candidates,
+                visual_model_candidates=visual_result.model_findings,
             )
 
             # 8. Prepare validator stats

@@ -69,14 +69,19 @@ class ValidatedFinding(BaseModel):
 
     This model matches the existing `findings` database contract.
     Does NOT include rule_id or fact_id - the database function resolves these from ref_key.
+    For visual findings, asset_id and region are used instead of quote/offsets.
     """
     source: Literal["deterministic", "llm"]
     ref_key: str
     category: str
     severity: str
-    quote: str
-    start_offset: int = Field(ge=0)
-    end_offset: int = Field(gt=0)
+    # Text-based findings use quote and offsets
+    quote: Optional[str] = None
+    start_offset: Optional[int] = Field(default=None, ge=0)
+    end_offset: Optional[int] = Field(default=None, gt=0)
+    # Visual findings use asset_id and region
+    asset_id: Optional[str] = None  # UUID as string
+    region: Optional[Dict[str, float]] = None  # Normalized bounding box: x, y, w, h (0-1)
     explanation: str = Field(min_length=1)
     suggestion: Optional[str] = None
     confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
@@ -85,10 +90,11 @@ class ValidatedFinding(BaseModel):
 
     @field_validator("end_offset")
     @classmethod
-    def validate_offsets(cls, v: int, info) -> int:
-        """Validate that end_offset > start_offset."""
-        if "start_offset" in info.data and v <= info.data["start_offset"]:
-            raise ValueError("end_offset must be greater than start_offset")
+    def validate_offsets(cls, v: Optional[int], info) -> Optional[int]:
+        """Validate that end_offset > start_offset when both are present."""
+        if v is not None and "start_offset" in info.data and info.data["start_offset"] is not None:
+            if v <= info.data["start_offset"]:
+                raise ValueError("end_offset must be greater than start_offset")
         return v
 
     @field_validator("confidence")
@@ -97,6 +103,18 @@ class ValidatedFinding(BaseModel):
         if v is not None and not (0.0 <= v <= 1.0):
             raise ValueError("confidence must be between 0.0 and 1.0")
         return v
+
+    @model_validator(mode="after")
+    def validate_finding_type(self) -> "ValidatedFinding":
+        """Ensure finding has either text evidence (quote+offsets) or visual evidence (asset_id+region)."""
+        has_text_evidence = self.quote is not None and self.start_offset is not None and self.end_offset is not None
+        has_visual_evidence = self.asset_id is not None and self.region is not None
+
+        if not has_text_evidence and not has_visual_evidence:
+            raise ValueError("Finding must have either text evidence (quote+offsets) or visual evidence (asset_id+region)")
+        if has_text_evidence and has_visual_evidence:
+            raise ValueError("Finding cannot have both text and visual evidence simultaneously")
+        return self
 
     model_config = {
         "extra": "forbid",
