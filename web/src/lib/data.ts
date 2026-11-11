@@ -1062,6 +1062,119 @@ function getEngineUrl(): string {
 
 export { getEngineUrl };
 
+export interface VisualAssetUploadResponse {
+  asset_id: string;
+  width: number;
+  height: number;
+  mime_type: 'image/png' | 'image/jpeg' | 'image/webp';
+  checksum: string;
+  signed_url: string;
+  expires_in: number;
+}
+
+const VISUAL_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+const VISUAL_UPLOAD_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+
+async function detectVisualImageMime(file: File): Promise<VisualAssetUploadResponse['mime_type']> {
+  const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+  const isPng = bytes.length >= 8
+    && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+    && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a;
+  const isJpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const isWebp = bytes.length >= 12
+    && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+    && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50;
+
+  if (isPng) return 'image/png';
+  if (isJpeg) return 'image/jpeg';
+  if (isWebp) return 'image/webp';
+  throw new ReviewEngineError('Unsupported image. Choose a PNG, JPG/JPEG, or WebP file.', 415);
+}
+
+function isVisualAssetUploadResponse(data: unknown): data is VisualAssetUploadResponse {
+  if (!data || typeof data !== 'object') return false;
+  const value = data as Record<string, unknown>;
+  return typeof value.asset_id === 'string'
+    && typeof value.width === 'number' && value.width > 0
+    && typeof value.height === 'number' && value.height > 0
+    && typeof value.mime_type === 'string' && VISUAL_UPLOAD_MIME_TYPES.has(value.mime_type)
+    && typeof value.checksum === 'string' && /^[0-9a-f]{64}$/i.test(value.checksum)
+    && typeof value.signed_url === 'string' && value.signed_url.length > 0
+    && typeof value.expires_in === 'number' && value.expires_in > 0;
+}
+
+/** Upload an image and associate it with one exact content revision. */
+export async function uploadVisualAsset(
+  file: File,
+  contentId: string,
+  revisionId: string,
+): Promise<VisualAssetUploadResponse> {
+  if (file.size <= 0) {
+    throw new ReviewEngineError('The selected image is empty.', 400);
+  }
+  if (file.size > VISUAL_UPLOAD_MAX_BYTES) {
+    throw new ReviewEngineError('Each image must be 10 MB or smaller.', 413);
+  }
+
+  const mimeType = await detectVisualImageMime(file);
+  if (file.type && file.type !== mimeType && VISUAL_UPLOAD_MIME_TYPES.has(file.type)) {
+    throw new ReviewEngineError('The file extension or browser media type does not match the image contents.', 415);
+  }
+
+  const token = await getAuthToken();
+  const formData = new FormData();
+  // Set a trusted, signature-verified MIME type even when the browser leaves File.type blank.
+  formData.append('file', file.slice(0, file.size, mimeType), file.name);
+  formData.append('content_id', contentId);
+  formData.append('revision_id', revisionId);
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120000);
+  try {
+    const response = await fetch(`${getEngineUrl()}/v1/imports/visual`, {
+      method: 'POST',
+      signal: controller.signal,
+      cache: 'no-store',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'X-Request-Id': crypto.randomUUID(),
+      },
+      // Do not set Content-Type: the browser must add the multipart boundary.
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const apiError = getApiErrorDetails(errorData);
+      throw new ReviewEngineError(
+        apiError.message || `Image upload failed: ${response.status} ${response.statusText}`,
+        response.status,
+        undefined,
+        apiError.reason,
+        apiError.retryAfterSeconds,
+      );
+    }
+
+    const data: unknown = await response.json();
+    if (!isVisualAssetUploadResponse(data)) {
+      throw new ReviewEngineError('The image upload response was invalid.', 500);
+    }
+    return data;
+  } catch (err) {
+    if (err instanceof ReviewEngineError) throw err;
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new ReviewEngineError('Image upload timed out after 120 seconds.', 504, err);
+    }
+    throw new ReviewEngineError(
+      err instanceof Error ? err.message : 'Image upload failed due to a network error.',
+      0,
+      err instanceof Error ? err : undefined,
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export async function lintKit(kitId: string): Promise<KitLintResponse> {
   const token = await getAuthToken();
   const controller = new AbortController();

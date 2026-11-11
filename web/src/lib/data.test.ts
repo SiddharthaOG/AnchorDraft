@@ -72,6 +72,7 @@ const {
   lintKit,
   createReviewPreview,
   confirmReviewPreview,
+  uploadVisualAsset,
   createRule,
   updateRule,
   deleteRule,
@@ -1137,6 +1138,80 @@ describe('review preview and confirmation API', () => {
       name: 'ReviewEngineError',
       status: 500,
     });
+  });
+});
+
+describe('visual asset upload API', () => {
+  const uploadResponse = {
+    asset_id: 'asset-visual-1',
+    width: 640,
+    height: 480,
+    mime_type: 'image/png' as const,
+    checksum: 'c'.repeat(64),
+    signed_url: 'https://storage.example/asset-visual-1.png',
+    expires_in: 3600,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch.mockReset();
+    mockAuthGetSession.mockResolvedValue({ data: { session: { access_token: 'test-token' } }, error: null });
+  });
+
+  it('posts a signature-verified PNG as multipart data with revision association', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => uploadResponse });
+    const png = new File([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'brand.png', { type: 'image/png' });
+
+    const result = await uploadVisualAsset(png, 'content-1', 'revision-1');
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/v1/imports/visual'),
+      expect.objectContaining({
+        method: 'POST',
+        cache: 'no-store',
+        headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
+      }),
+    );
+    const request = mockFetch.mock.calls[0][1] as RequestInit;
+    expect(request.body).toBeInstanceOf(FormData);
+    const body = request.body as FormData;
+    expect(body.get('content_id')).toBe('content-1');
+    expect(body.get('revision_id')).toBe('revision-1');
+    expect((body.get('file') as Blob).type).toBe('image/png');
+    expect(request.headers).not.toHaveProperty('Content-Type');
+    expect(result).toEqual(uploadResponse);
+  });
+
+  it('accepts JPEG and WebP signatures even when the browser omits File.type', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ ...uploadResponse, mime_type: 'image/jpeg' }) });
+    const jpeg = new File([Uint8Array.from([0xff, 0xd8, 0xff, 0x00])], 'photo.jpg');
+    await uploadVisualAsset(jpeg, 'content-1', 'revision-1');
+    const jpegRequest = mockFetch.mock.calls[0][1] as RequestInit;
+    expect(((jpegRequest.body as FormData).get('file') as Blob).type).toBe('image/jpeg');
+
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ ...uploadResponse, mime_type: 'image/webp' }) });
+    const webp = new File([Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50])], 'graphic.webp');
+    await uploadVisualAsset(webp, 'content-1', 'revision-1');
+    const webpRequest = mockFetch.mock.calls[1][1] as RequestInit;
+    expect(((webpRequest.body as FormData).get('file') as Blob).type).toBe('image/webp');
+  });
+
+  it('rejects unsupported formats based on file signature before making a request', async () => {
+    const gif = new File([Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61])], 'animation.gif', { type: 'image/gif' });
+    await expect(uploadVisualAsset(gif, 'content-1', 'revision-1')).rejects.toMatchObject({
+      status: 415,
+      message: 'Unsupported image. Choose a PNG, JPG/JPEG, or WebP file.',
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects images above the 10 MB backend limit before making a request', async () => {
+    const oversized = new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'large.png', { type: 'image/png' });
+    await expect(uploadVisualAsset(oversized, 'content-1', 'revision-1')).rejects.toMatchObject({
+      status: 413,
+      message: 'Each image must be 10 MB or smaller.',
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 

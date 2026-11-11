@@ -308,3 +308,30 @@ The user's first live confirmed review reached the background pipeline and faile
 ### State checkpoint
 
 As of this entry, Improvement 2's live path has successfully completed `POST /v1/reviews/preview` (201 Created) and `POST /v1/reviews/confirm` (202 Accepted) on staging. The confirmed background job then failed on the missing requester field above. The prior date-string normalization fix is already live. Preserve this working preview/confirmation path; do not replace it with a direct review-start path or bypass consent, policy, or preview integrity checks.
+
+
+## 2026-11-12 ? Creator Image Upload UI for Visual Brand Compliance
+
+### Implementation
+
+- Added an **Upload images** section to the content detail page for creators/owners, associated with the latest revision only (the review engine only processes the latest revision).
+- Supports selecting multiple PNG, JPEG/JPG, and WebP files, uploaded sequentially to the existing `POST /v1/imports/visual` endpoint.
+- Added a typed frontend API client using authenticated multipart `FormData`, preserving the browser-generated multipart boundary and carrying `content_id` plus `revision_id`.
+- Client checks empty files, the 10 MB per-image limit, and actual PNG/JPEG/WebP file signatures before upload; it does not trust filename extensions alone.
+- Shows per-file progress/errors and thumbnails from short-lived signed URLs after successful upload.
+- Pauses uploads for historical revision selections and while a review is queued/running. Successful attachment clears the prior review presentation so a fresh privacy preview/consent step is required.
+- Upload does not trigger provider processing or image consent. Existing preview/confirmation safeguards remain the only route to send original image bytes to a vision provider.
+- Reuses the existing backend upload pipeline, which validates image bytes, strips image metadata, writes to private Supabase Storage, records integrity metadata, and associates the asset with the content revision.
+
+### Verification
+
+- Frontend full suite: **194 passed across 11 files**.
+- Targeted upload/data + ContentDetail tests: **108 passed**.
+- `npm run build`: succeeded; existing Vite ineffective dynamic-import warning remains.
+- `git diff --check`: passed.
+
+### Scope and limitations
+
+- Supported image formats deliberately match the backend and visual asset service: PNG, JPEG, WebP. GIF/SVG are not accepted by the existing visual-analysis storage pipeline.
+- The upload section shows previews uploaded during the current page session. Previously linked images remain visible in the review privacy preview; a persistent asset gallery/list endpoint is not part of this UI addition.
+- No backend code or database migration was changed in this upload UI slice.

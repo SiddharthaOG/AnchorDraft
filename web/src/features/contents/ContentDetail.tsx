@@ -21,11 +21,17 @@ import {
   type FindingWithDecision,
   type ReviewPreviewResponse,
   ReviewEngineError,
+  uploadVisualAsset,
+  type VisualAssetUploadResponse,
 } from '../../lib/data';
 import { createReviewPreview, confirmReviewPreview } from '../../lib/data';
 
 interface FindingDisplay extends FindingWithDecision {
   displayQuote: string;
+}
+
+interface UploadedVisualAsset extends VisualAssetUploadResponse {
+  fileName: string;
 }
 
 function StatusBadge({ status }: { status: Content['status'] }) {
@@ -446,6 +452,10 @@ export function ContentDetail() {
   const [imageConsent, setImageConsent] = useState(false);
   const [confirmingPreview, setConfirmingPreview] = useState(false);
   const [applyingDecisions, setApplyingDecisions] = useState(false);
+  const [uploadedVisualAssets, setUploadedVisualAssets] = useState<UploadedVisualAsset[]>([]);
+  const [isUploadingVisualAssets, setIsUploadingVisualAssets] = useState(false);
+  const [visualUploadProgress, setVisualUploadProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [visualUploadError, setVisualUploadError] = useState<string | null>(null);
 
   // Editor visibility state (separate from mutation state)
   const [isRevisionEditorOpen, setIsRevisionEditorOpen] = useState(false);
@@ -456,6 +466,8 @@ export function ContentDetail() {
   const startingReviewRef = useRef(false);
   const confirmingPreviewRef = useRef(false);
   const applyingDecisionsRef = useRef(false);
+  const uploadingVisualAssetsRef = useRef(false);
+  const visualUploadInputRef = useRef<HTMLInputElement>(null);
 
   // Error states
   const [toastError, setToastError] = useState<string | null>(null);
@@ -497,6 +509,13 @@ export function ContentDetail() {
     setImageConsent(false);
     setReviewActionError(null);
   }, [contentId]);
+
+  // Uploaded previews and errors belong to one exact revision.
+  useEffect(() => {
+    setUploadedVisualAssets([]);
+    setVisualUploadError(null);
+    setVisualUploadProgress(null);
+  }, [contentId, latestRevision?.id]);
 
   // Reset selection when content changes
   useEffect(() => {
@@ -752,6 +771,68 @@ const startPolling = useCallback(() => {
     setPendingSignoffs(0);
   }, [contentId]);
 
+  const handleVisualImageSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.currentTarget.files ?? []);
+    // Clear the input so selecting the same file again triggers another change event.
+    event.currentTarget.value = '';
+    if (files.length === 0) return;
+    if (!content || !latestRevision?.id) {
+      setVisualUploadError('Create a revision before attaching images.');
+      return;
+    }
+    if (selectedRevisionId !== latestRevision.id) {
+      setVisualUploadError('Select the latest revision before attaching images. Visual reviews only process the latest revision.');
+      return;
+    }
+    if (latestReview?.status === 'queued' || latestReview?.status === 'running') {
+      setVisualUploadError('Images cannot be changed while a review is queued or running.');
+      return;
+    }
+    if (uploadingVisualAssetsRef.current) return;
+
+    uploadingVisualAssetsRef.current = true;
+    setIsUploadingVisualAssets(true);
+    setVisualUploadError(null);
+    setVisualUploadProgress({ completed: 0, total: files.length });
+    const failures: string[] = [];
+    let uploadedCount = 0;
+
+    try {
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        try {
+          const result = await uploadVisualAsset(file, content.id, latestRevision.id);
+          setUploadedVisualAssets(current => [
+            ...current.filter(asset => asset.asset_id !== result.asset_id),
+            { ...result, fileName: file.name },
+          ]);
+          uploadedCount += 1;
+        } catch (err) {
+          failures.push(`${file.name}: ${err instanceof Error ? err.message : 'Upload failed'}`);
+        } finally {
+          setVisualUploadProgress({ completed: index + 1, total: files.length });
+        }
+      }
+
+      if (uploadedCount > 0) {
+        // A newly attached image changes the review input set. Require a fresh
+        // preview/confirmation rather than leaving an old review looking current.
+        stopPolling();
+        setLatestReview(null);
+        setFindings([]);
+        setPendingSignoffs(0);
+        setReviewActionError(null);
+      }
+      if (failures.length > 0) {
+        setVisualUploadError(failures.join(' '));
+      }
+    } finally {
+      setIsUploadingVisualAssets(false);
+      setVisualUploadProgress(null);
+      uploadingVisualAssetsRef.current = false;
+    }
+  };
+
   const handleSubmit = async () => {
     if (!content || !latestRevision) return;
     if (submittingRef.current) return;
@@ -958,6 +1039,7 @@ const startPolling = useCallback(() => {
   }
 
   const isContentEditable = content.status === 'draft' || content.status === 'changes_requested';
+  const canUploadVisualAssets = session.currentRoles.includes('creator') || session.currentRoles.includes('owner');
   const hasLatestReview = !!latestReview;
   const hasPendingDecisions = findings.some(f => (f.last_action === 'accept' || f.last_action === 'edit') && !f.resulting_revision_id);
   const hasDecisions = findings.some(f => f.last_action);
@@ -1076,6 +1158,64 @@ const startPolling = useCallback(() => {
               </pre>
             </div>
           </div>
+
+          {/* Visual assets for Improvement 1 */}
+          {isContentEditable && canUploadVisualAssets && latestRevision && (
+            <section className="bg-white border border-gray-200 rounded-lg" aria-labelledby="visual-assets-title">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 p-4">
+                <div>
+                  <h2 id="visual-assets-title" className="font-semibold text-gray-900">Visual Assets</h2>
+                  <p className="mt-1 text-xs text-gray-500">Images attached to latest revision {latestRevision.version}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => visualUploadInputRef.current?.click()}
+                  disabled={isUploadingVisualAssets || selectedRevisionId !== latestRevision.id || latestReview?.status === 'queued' || latestReview?.status === 'running'}
+                  className="inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isUploadingVisualAssets ? 'Uploading images...' : 'Upload images'}
+                </button>
+                <input
+                  ref={visualUploadInputRef}
+                  aria-label="Choose images to upload"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                  multiple
+                  className="sr-only"
+                  onChange={handleVisualImageSelection}
+                  disabled={isUploadingVisualAssets || selectedRevisionId !== latestRevision.id || latestReview?.status === 'queued' || latestReview?.status === 'running'}
+                />
+              </div>
+              <div className="space-y-3 p-4">
+                <p className="text-xs text-gray-500">PNG, JPG/JPEG, and WebP (10 MB maximum per image). Uploading attaches images to this revision; it does not send them to an AI provider. Image metadata is removed before private storage. The privacy preview will disclose image use and request consent before original image bytes are sent.</p>
+                {selectedRevisionId !== latestRevision.id && (
+                  <p className="text-sm text-amber-800" role="status">Select the latest revision to attach images for visual review.</p>
+                )}
+                {(latestReview?.status === 'queued' || latestReview?.status === 'running') && (
+                  <p className="text-sm text-amber-800" role="status">Image uploads are paused while this revision is being reviewed.</p>
+                )}
+                {visualUploadProgress && (
+                  <p className="text-sm text-gray-600" role="status">Uploading image {visualUploadProgress.completed} of {visualUploadProgress.total}...</p>
+                )}
+                {visualUploadError && <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{visualUploadError}</p>}
+                {uploadedVisualAssets.length === 0 ? (
+                  <p className="text-sm text-gray-500">No images uploaded in this session yet. Existing linked images will appear in the review privacy preview.</p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {uploadedVisualAssets.map(asset => (
+                      <figure key={asset.asset_id} className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
+                        <img src={asset.signed_url} alt={asset.fileName} className="h-32 w-full bg-gray-100 object-contain" />
+                        <figcaption className="space-y-1 p-2">
+                          <p className="truncate text-xs font-medium text-gray-800" title={asset.fileName}>{asset.fileName}</p>
+                          <p className="text-xs text-gray-500">{asset.width} x {asset.height} | {asset.mime_type}</p>
+                        </figcaption>
+                      </figure>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
 
           {/* Review Status */}
           <div className="bg-white border border-gray-200 rounded-lg">

@@ -17,6 +17,7 @@ const {
   mockSubmitContent,
   mockCreateReviewPreview,
   mockConfirmReviewPreview,
+  mockUploadVisualAsset,
   mockRecordDecision,
   mockApplyDecisions,
 } = vi.hoisted(() => ({
@@ -30,6 +31,7 @@ const {
   mockSubmitContent: vi.fn(),
   mockCreateReviewPreview: vi.fn(),
   mockConfirmReviewPreview: vi.fn(),
+  mockUploadVisualAsset: vi.fn(),
   mockRecordDecision: vi.fn(),
   mockApplyDecisions: vi.fn(),
 }));
@@ -45,6 +47,7 @@ vi.mock('../../lib/data', () => ({
   submitContent: mockSubmitContent,
   createReviewPreview: mockCreateReviewPreview,
   confirmReviewPreview: mockConfirmReviewPreview,
+  uploadVisualAsset: mockUploadVisualAsset,
   recordDecision: mockRecordDecision,
   applyDecisions: mockApplyDecisions,
 }));
@@ -144,6 +147,15 @@ describe('ContentDetail', () => {
     mockGetPendingSignoffs.mockResolvedValue(defaultSignoffs);
     mockCreateRevision.mockResolvedValue({ revision_id: 'revision-2', version: 2 });
     mockSubmitContent.mockResolvedValue(undefined);
+    mockUploadVisualAsset.mockResolvedValue({
+      asset_id: 'asset-uploaded-1',
+      width: 640,
+      height: 480,
+      mime_type: 'image/png',
+      checksum: 'c'.repeat(64),
+      signed_url: 'https://storage.example/asset-uploaded-1.png',
+      expires_in: 3600,
+    });
     mockCreateReviewPreview.mockResolvedValue({
       preview_id: 'preview-1',
       revision_id: 'revision-1',
@@ -554,6 +566,63 @@ describe('ContentDetail', () => {
 
       // Create Revision button should be enabled again
       expect(screen.getByRole('button', { name: 'Create Revision' })).not.toBeDisabled();
+    });
+  });
+
+  describe('Visual asset uploads', () => {
+    it('uploads multiple supported images to the latest revision and shows their previews', { timeout: 15000 }, async () => {
+      mockGetLatestReviewForRevision.mockResolvedValue(null);
+      mockUploadVisualAsset
+        .mockResolvedValueOnce({
+          asset_id: 'asset-uploaded-png', width: 640, height: 480, mime_type: 'image/png',
+          checksum: 'a'.repeat(64), signed_url: 'https://storage.example/brand.png', expires_in: 3600,
+        })
+        .mockResolvedValueOnce({
+          asset_id: 'asset-uploaded-jpeg', width: 1200, height: 800, mime_type: 'image/jpeg',
+          checksum: 'b'.repeat(64), signed_url: 'https://storage.example/photo.jpg', expires_in: 3600,
+        });
+
+      await renderAndWaitForLoad(<ContentDetail />);
+      const png = new File(['png'], 'brand.png', { type: 'image/png' });
+      const jpeg = new File(['jpeg'], 'photo.jpg', { type: 'image/jpeg' });
+      fireEvent.change(screen.getByLabelText('Choose images to upload'), {
+        target: { files: [png, jpeg] },
+      });
+
+      await waitFor(() => expect(mockUploadVisualAsset).toHaveBeenCalledTimes(2));
+      expect(mockUploadVisualAsset).toHaveBeenNthCalledWith(1, png, 'content-1', 'revision-1');
+      expect(mockUploadVisualAsset).toHaveBeenNthCalledWith(2, jpeg, 'content-1', 'revision-1');
+      expect(await screen.findByText('brand.png')).toBeInTheDocument();
+      expect(screen.getByText('photo.jpg')).toBeInTheDocument();
+      // Attaching new images invalidates the old review presentation and requires a fresh preview.
+      expect(screen.getByRole('button', { name: 'Start Review' })).toBeEnabled();
+    });
+
+    it('prevents image uploads while viewing a historical revision', { timeout: 15000 }, async () => {
+      const olderRevision = { ...defaultRevision, id: 'revision-0', version: 0 };
+      mockGetLatestReviewForRevision.mockResolvedValue(null);
+      mockGetRevisions.mockResolvedValue([olderRevision, defaultRevision]);
+
+      await renderAndWaitForLoad(<ContentDetail />);
+      fireEvent.click(screen.getByRole('button', { name: /Revision 0/ }));
+
+      expect(screen.getByRole('button', { name: 'Upload images' })).toBeDisabled();
+      expect(mockUploadVisualAsset).not.toHaveBeenCalled();
+    });
+
+    it('shows a useful error when an image upload fails', { timeout: 15000 }, async () => {
+      mockGetLatestReviewForRevision.mockResolvedValue(null);
+      mockUploadVisualAsset.mockRejectedValueOnce(new Error('Each image must be 10 MB or smaller.'));
+
+      await renderAndWaitForLoad(<ContentDetail />);
+      const png = new File(['png'], 'too-large.png', { type: 'image/png' });
+      fireEvent.change(screen.getByLabelText('Choose images to upload'), {
+        target: { files: [png] },
+      });
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'too-large.png: Each image must be 10 MB or smaller.',
+      );
     });
   });
 
