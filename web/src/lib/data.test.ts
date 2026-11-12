@@ -1084,7 +1084,7 @@ describe('review preview and confirmation API', () => {
     await expect(confirmReviewPreview('preview-1', 'token', false)).rejects.toMatchObject({
       name: 'ReviewEngineError',
       status: 409,
-      message: 'Preview expired',
+      message: expect.stringMatching(/^Preview expired \(Reference ID: .+\)$/),
       reason: 'preview_expired',
     });
   });
@@ -1099,7 +1099,7 @@ describe('review preview and confirmation API', () => {
     await expect(createReviewPreview('not-a-uuid')).rejects.toMatchObject({
       status: 422,
       reason: 'request_validation_error',
-      message: 'Request validation failed: body.revision_id: Input should be a valid UUID',
+      message: expect.stringMatching(/^Request validation failed: body\.revision_id: Input should be a valid UUID \(Reference ID: .+\)$/),
     });
   });
 
@@ -1112,7 +1112,30 @@ describe('review preview and confirmation API', () => {
     });
     await expect(confirmReviewPreview('preview-1', 'token', false)).rejects.toMatchObject({
       status: 400,
-      message: 'Explicit consent is required',
+      message: expect.stringMatching(/^Explicit consent is required \(Reference ID: .+\)$/),
+    });
+  });
+
+  it('preserves backend request IDs for support diagnostics', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      statusText: 'Conflict',
+      headers: new Headers({ 'X-Request-Id': 'request-correlation-123' }),
+      json: async () => ({
+        error: {
+          code: 'conflict',
+          reason: 'preview_expired',
+          message: 'Preview expired',
+          request_id: 'request-correlation-123',
+        },
+      }),
+    });
+    await expect(confirmReviewPreview('preview-1', 'token', false)).rejects.toMatchObject({
+      status: 409,
+      reason: 'preview_expired',
+      requestId: 'request-correlation-123',
+      message: 'Preview expired (Reference ID: request-correlation-123)',
     });
   });
 

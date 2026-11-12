@@ -177,6 +177,21 @@ describe('AuthProvider', () => {
     unmount()
   })
 
+  it('surfaces auth listener initialization failures instead of throwing from the effect', async () => {
+    mockedInitializeSession.mockRejectedValue(new Error('Supabase configuration is missing'));
+    mockedOnAuthStateChange.mockImplementation(() => {
+      throw new Error('Supabase configuration is missing');
+    });
+    mockedSubscribeToSession.mockImplementation(() => () => {});
+
+    const { unmount } = renderAuthProvider();
+    await waitFor(() => {
+      expect(screen.getByTestId('error')).toHaveTextContent('Supabase configuration is missing');
+      expect(screen.getByTestId('loading')).toHaveTextContent('false');
+    });
+    unmount();
+  });
+
   it('does not independently update session from onAuthStateChange callback', async () => {
     const subscribeToSessionCalls: any[] = []
 
@@ -282,3 +297,32 @@ describe('AuthProvider', () => {
     unmount()
   })
 })
+
+describe('AuthProvider async action failures', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedInitializeSession.mockResolvedValue(authenticatedSession);
+    mockedOnAuthStateChange.mockReturnValue({ unsubscribe: vi.fn() } as any);
+    mockedSubscribeToSession.mockImplementation((listener: any) => {
+      listener(authenticatedSession);
+      return () => {};
+    });
+  });
+
+  it('surfaces unexpected sign-in failures without leaving the UI loading', async () => {
+    vi.mocked(signInWithEmail).mockRejectedValue(new Error('Network unavailable'));
+
+    const { unmount } = renderAuthProvider();
+    await waitFor(() => expect(screen.getByTestId('loading')).toHaveTextContent('false'));
+
+    await act(async () => {
+      screen.getByText('Sign In').click();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('error')).toHaveTextContent('Network unavailable');
+      expect(screen.getByTestId('loading')).toHaveTextContent('false');
+    });
+    unmount();
+  });
+});
