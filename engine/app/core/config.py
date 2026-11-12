@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     # Groq settings
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "openai/gpt-oss-120b"
+    GROQ_VISION_MODEL: str = "qwen/qwen3.8-27b"
     GROQ_TPM_LIMIT: int = 8000
     GROQ_RPM_LIMIT: int = 30
 

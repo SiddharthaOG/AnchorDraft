@@ -11,6 +11,7 @@ from app.llm.provider_factory import (
     create_provider,
     create_fallback_provider,
     create_fallback_vision_provider,
+    create_vision_provider,
     get_provider,
     get_provider_with_fallback,
     ProviderWithFallback,
@@ -72,6 +73,8 @@ class TestProviderSettings:
         settings = ProviderSettings()
         assert settings.provider_type == ProviderType.FAKE
         assert settings.groq_model == "openai/gpt-oss-120b"
+        assert settings.groq_vision_model == "qwen/qwen3.8-27b"
+        assert settings.groq_tpm_limit == 8000
         assert settings.gemini_model == "gemini-3.8-flash"
         assert settings.gemini_fallback_model == "gemini-3.6-flash"
         assert settings.fallback_enabled is True
@@ -231,6 +234,30 @@ class TestCreateFallbackProvider:
         )
         fallback = create_fallback_provider(settings)
         assert isinstance(fallback, GroqProvider)
+        assert fallback.model == "openai/gpt-oss-120b"
+
+    def test_create_groq_vision_primary_uses_configured_model(self):
+        """Groq vision primary must use its dedicated multimodal model setting."""
+        settings = ProviderSettings(
+            provider_type=ProviderType.GROQ,
+            groq_api_key="test-groq-key",
+            groq_vision_model="qwen/qwen3.8-27b",
+        )
+        provider = create_vision_provider(settings)
+        assert provider.model == "qwen/qwen3.8-27b"
+
+    def test_create_groq_vision_fallback_uses_current_configured_model(self):
+        """Vision fallback must use the configured, currently supported Groq model."""
+        settings = ProviderSettings(
+            provider_type=ProviderType.GEMINI,
+            gemini_api_key="test-gemini-key",
+            groq_api_key="test-groq-key",
+            groq_vision_model="qwen/qwen3.8-27b",
+            fallback_provider=ProviderType.GROQ,
+        )
+        fallback = create_fallback_vision_provider(settings)
+        assert fallback is not None
+        assert fallback.model == "qwen/qwen3.8-27b"
 
     def test_fallback_missing_key_returns_none(self):
         """Test that fallback with missing key returns None and logs warning."""
@@ -574,6 +601,7 @@ class TestLoadSettings:
             mock_settings.LLM_FALLBACK_ENABLED = True
             mock_settings.GROQ_API_KEY = ""
             mock_settings.GROQ_MODEL = "openai/gpt-oss-120b"
+            mock_settings.GROQ_VISION_MODEL = "qwen/qwen3.8-27b"
             mock_settings.GROQ_TPM_LIMIT = 8000
             mock_settings.GROQ_RPM_LIMIT = 30
             mock_settings.GEMINI_API_KEY = ""
@@ -587,6 +615,8 @@ class TestLoadSettings:
             assert isinstance(settings, ProviderSettings)
             assert settings.provider_type == ProviderType.FAKE
             assert settings.fallback_provider == ProviderType.GEMINI
+            assert settings.groq_vision_model == "qwen/qwen3.8-27b"
+            assert settings.groq_tpm_limit == 8000
 
 
 class TestLoadSettingsEnvironmentBehavior:
@@ -604,6 +634,7 @@ class TestLoadSettingsEnvironmentBehavior:
             "LLM_FALLBACK_ENABLED": True,
             "GROQ_API_KEY": "",
             "GROQ_MODEL": "openai/gpt-oss-120b",
+            "GROQ_VISION_MODEL": "qwen/qwen3.8-27b",
             "GROQ_TPM_LIMIT": 8000,
             "GROQ_RPM_LIMIT": 30,
             "GEMINI_API_KEY": "",
