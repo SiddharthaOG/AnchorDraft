@@ -482,6 +482,23 @@ class TestGeminiErrorMapping:
                 await provider.generate_findings(request)
 
     @pytest.mark.asyncio
+    async def test_retry_is_skipped_when_backoff_exceeds_provider_deadline(self):
+        """A retry must not begin when the shared provider deadline cannot cover its backoff."""
+        provider = GeminiProvider(api_key="test-key")
+        request = make_request(timeout_seconds=1)
+
+        error = Exception("Rate limit exceeded: 429")
+        error.retry_delay = 10
+
+        with patch.object(provider._client.aio.models, "generate_content", new_callable=AsyncMock) as mock_generate:
+            mock_generate.side_effect = error
+
+            with pytest.raises(RateLimitedError):
+                await provider.generate_findings(request)
+
+            assert mock_generate.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_5xx_mapped_to_unavailable(self):
         """Test that 5xx errors are mapped to UnavailableError."""
         provider = GeminiProvider(api_key="test-key")
