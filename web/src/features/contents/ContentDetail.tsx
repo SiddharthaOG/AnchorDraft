@@ -694,8 +694,6 @@ const startPolling = useCallback(() => {
         return;
       }
 
-      setLatestReview(review);
-
       if (review.status === 'done' || review.status === 'failed') {
         const [findingsData, signoffs] = await Promise.all([
           getFindingsWithDecisionsForReview(review.id),
@@ -710,10 +708,15 @@ const startPolling = useCallback(() => {
           return;
         }
 
+        // Publish terminal status only after its findings have loaded. The
+        // status effect stops polling; publishing it earlier invalidates this
+        // in-flight request and discards the findings response.
         setFindings(findingsData as FindingDisplay[]);
         setPendingSignoffs(signoffs.length);
-
+        setLatestReview(review);
         stopPolling();
+      } else {
+        setLatestReview(review);
       }
     } catch (err) {
       if (
