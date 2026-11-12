@@ -485,3 +485,19 @@ class TestKitLintLimits:
         
         error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
         assert "TOO_MANY_REQUIRE_ANY_TERMS" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_rejects_invalid_visual_guidelines(self, mock_supabase, auth_user, kit_id):
+        from app.api.kits import lint_kit
+
+        self._setup_valid_kit(mock_supabase, kit_id, [], [])
+        mock_supabase.get_kit.return_value["visual_guidelines"] = {
+            "palette": {"colors": [{"name": "Primary", "hex": "not-a-color"}]}
+        }
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert result["ok"] is False
+        issue = next(item for item in result["issues"] if item["code"] == "INVALID_VISUAL_GUIDELINES")
+        assert issue["severity"] == "error"
+        assert issue["message"] == "Visual brand guidelines contain invalid configuration"

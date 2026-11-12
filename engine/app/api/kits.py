@@ -1,15 +1,164 @@
 """Kit lint API endpoints."""
-from fastapi import APIRouter, Depends, Path, status, HTTPException
-from uuid import UUID
-from datetime import date
+import json
 import re
+from datetime import date
+from typing import Literal
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Path, status, HTTPException
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.auth.dependencies import AuthUser, get_current_user_single_org, require_owner
 from app.auth.supabase import get_supabase_client
+from app.store.db import DatabasePool, get_db_pool
 from app.checks.deterministic import check_map
 from app.checks.deterministic import RuleConfig
 
 router = APIRouter()
+
+
+class _VisualGuidelineModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class VisualLogoGuidelines(_VisualGuidelineModel):
+    required: bool = False
+    description: str | None = Field(default=None, max_length=500)
+    variants: list[str] = Field(default_factory=list, max_length=8)
+    clear_space_ratio: float = Field(default=0.1, ge=0, le=1)
+    min_size_px: int = Field(default=32, ge=1, le=4096)
+
+    @field_validator("variants")
+    @classmethod
+    def validate_variants(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value or len(value) > 80 for value in normalized):
+            raise ValueError("Logo variants must be non-empty and at most 80 characters")
+        if len({value.casefold() for value in normalized}) != len(normalized):
+            raise ValueError("Logo variants must be unique")
+        return normalized
+
+
+class VisualPaletteColor(_VisualGuidelineModel):
+    name: str = Field(min_length=1, max_length=40)
+    hex: str = Field(pattern=r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+
+class VisualPaletteGuidelines(_VisualGuidelineModel):
+    colors: list[VisualPaletteColor] = Field(min_length=1, max_length=12)
+    tolerance: float = Field(default=10, ge=0, le=100)
+    allow_neutrals: bool = True
+
+
+class VisualContrastGuidelines(_VisualGuidelineModel):
+    min_ratio: float = Field(default=4.5, ge=1, le=21)
+    level: Literal["AA", "AAA"] = "AA"
+    ignore_backgrounds: list[str] = Field(
+        default_factory=lambda: ["#FFFFFF", "#000000"],
+        max_length=8,
+    )
+
+    @field_validator("ignore_backgrounds")
+    @classmethod
+    def validate_backgrounds(cls, values: list[str]) -> list[str]:
+        normalized = [value.upper() for value in values]
+        if any(not re.fullmatch(r"#(?:[0-9A-F]{3}|[0-9A-F]{6})", value) for value in normalized):
+            raise ValueError("Ignored backgrounds must be 3- or 6-digit hex colors")
+        return normalized
+
+
+class VisualGuidelines(_VisualGuidelineModel):
+    logo: VisualLogoGuidelines | None = None
+    palette: VisualPaletteGuidelines | None = None
+    contrast: VisualContrastGuidelines | None = None
+
+
+class UpdateVisualGuidelinesRequest(_VisualGuidelineModel):
+    visual_guidelines: VisualGuidelines
+
+
+@router.put(
+    "/kits/{kit_id}/visual-guidelines",
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Visual guidelines saved"},
+        403: {"description": "Forbidden - not an owner"},
+        404: {"description": "Kit not found"},
+        409: {"description": "Only draft kits can be edited"},
+        422: {"description": "Invalid visual guidelines"},
+    },
+)
+async def update_visual_guidelines(
+    kit_id: UUID = Path(..., description="Draft brand kit ID"),
+    body: UpdateVisualGuidelinesRequest = ...,
+    user: AuthUser = Depends(require_owner),
+    pool: DatabasePool = Depends(get_db_pool),
+):
+    """Save validated visual guidelines on an owner-managed draft kit."""
+    guidelines = body.visual_guidelines.model_dump(exclude_none=True)
+    async with pool.pool.acquire() as conn:
+        async with conn.transaction():
+            kit = await conn.fetchrow(
+                """
+                select id, status
+                  from public.brand_kits
+                 where id = $1 and org_id = $2
+                 for update
+                """,
+                kit_id,
+                user.org_id,
+            )
+            if not kit:
+                raise HTTPException(status_code=404, detail="Kit not found")
+            if kit["status"] != "draft":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": {
+                            "code": "kit_not_editable",
+                            "message": "Visual guidelines can only be changed on draft kits",
+                        }
+                    },
+                )
+
+            updated = await conn.fetchrow(
+                """
+                update public.brand_kits
+                   set visual_guidelines = $3::jsonb
+                 where id = $1 and org_id = $2 and status = 'draft'
+                returning visual_guidelines
+                """,
+                kit_id,
+                user.org_id,
+                json.dumps(guidelines, separators=(",", ":")),
+            )
+            if not updated:
+                raise HTTPException(status_code=409, detail="Kit changed while saving visual guidelines")
+
+            await conn.execute(
+                """
+                insert into public.audit_log
+                    (org_id, actor_id, action, entity_type, entity_id, detail)
+                values ($1, $2, 'kit.visual_guidelines_updated', 'brand_kit', $3, $4::jsonb)
+                """,
+                user.org_id,
+                user.user_id,
+                kit_id,
+                json.dumps(
+                    {
+                        "logo_configured": "logo" in guidelines,
+                        "palette_color_count": len(guidelines.get("palette", {}).get("colors", [])),
+                        "contrast_configured": "contrast" in guidelines,
+                    },
+                    separators=(",", ":"),
+                ),
+            )
+
+    return {
+        "kit_id": str(kit_id),
+        "visual_guidelines": guidelines,
+    }
+
 
 
 @router.post(
@@ -47,6 +196,16 @@ async def lint_kit(
 
     issues = []
     warnings = []
+
+    try:
+        VisualGuidelines.model_validate(kit.get("visual_guidelines") or {})
+    except ValidationError:
+        issues.append({
+            "severity": "error",
+            "code": "INVALID_VISUAL_GUIDELINES",
+            "ref_key": None,
+            "message": "Visual brand guidelines contain invalid configuration",
+        })
 
     # Validate all rules first, building a consistently validated collection
     # of dictionary rules for all subsequent processing.

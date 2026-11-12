@@ -60,7 +60,7 @@ class TestCORS:
         # The key check is that wildcard is not used
         assert "*" not in options.get("allow_origins", []), "Wildcard not allowed in CORS origins"
         assert options.get("allow_credentials") is True
-        assert set(options.get("allow_methods", [])) == {"GET", "POST", "OPTIONS"}
+        assert set(options.get("allow_methods", [])) == {"GET", "POST", "PUT", "OPTIONS"}
         # Check allowed headers include X-Request-Id, Authorization, Content-Type
         assert "X-Request-Id" in options.get("allow_headers", [])
         assert "Authorization" in options.get("allow_headers", [])
@@ -107,6 +107,24 @@ class TestCORS:
         assert response.headers.get("access-control-allow-credentials") == "true"
         # Should allow the requested headers
         assert "x-request-id" in response.headers.get("access-control-allow-headers", "").lower()
+
+    @pytest.mark.asyncio
+    async def test_cors_preflight_put_is_allowed_for_visual_guideline_updates(self, client_comma_separated):
+        response = await client_comma_separated.options(
+            "/v1/kits/11111111-1111-1111-1111-111111111111/visual-guidelines",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "PUT",
+                "Access-Control-Request-Headers": "authorization,content-type,x-request-id",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
+        assert "put" in response.headers.get("access-control-allow-methods", "").lower()
+        allowed_headers = response.headers.get("access-control-allow-headers", "").lower()
+        assert "authorization" in allowed_headers
+        assert "content-type" in allowed_headers
+        assert "x-request-id" in allowed_headers
 
     @pytest.mark.asyncio
     async def test_cors_preflight_disallowed_origin_rejected(self, client):
@@ -190,3 +208,31 @@ class TestCORSCommaSeparated:
             },
         )
         assert response.headers.get("access-control-allow-origin") != "http://evil.com"
+
+class TestIntegratedRouterRegistration:
+    """Regression coverage for routers combined across the feature branches."""
+
+    def test_confidentiality_policy_routes_registered(self, app):
+        paths = app.openapi()["paths"]
+        assert "/v1/organizations/me/confidentiality-policy" in paths
+        assert "get" in paths["/v1/organizations/me/confidentiality-policy"]
+        assert "put" in paths["/v1/organizations/me/confidentiality-policy"]
+
+    def test_visual_guidelines_route_registered(self, app):
+        paths = app.openapi()["paths"]
+        assert "/v1/kits/{kit_id}/visual-guidelines" in paths
+        assert "put" in paths["/v1/kits/{kit_id}/visual-guidelines"]
+
+    @pytest.mark.asyncio
+    async def test_cors_preflight_allows_visual_guideline_put(self, client_comma_separated):
+        response = await client_comma_separated.options(
+            "/v1/kits/22222222-2222-2222-2222-222222222222/visual-guidelines",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "PUT",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
+        assert "PUT" in response.headers.get("access-control-allow-methods", "")
