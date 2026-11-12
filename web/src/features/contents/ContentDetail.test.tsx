@@ -933,6 +933,27 @@ describe('ContentDetail', () => {
       ).toBeInTheDocument();
     });
 
+    it('does not briefly expose submission before findings finish loading', { timeout: 15000 }, async () => {
+      let resolveFindings!: (value: any[]) => void;
+      mockGetFindingsWithDecisionsForReview.mockImplementationOnce(() =>
+        new Promise(resolve => { resolveFindings = resolve; }),
+      );
+
+      await renderAndWaitForLoad(<ContentDetail />);
+
+      // The review status can arrive before its findings. Empty initial state
+      // must never be treated as a completed, zero-finding review.
+      expect(screen.queryByRole('button', { name: 'Submit for Review' })).not.toBeInTheDocument();
+
+      await act(async () => {
+        resolveFindings([]);
+      });
+
+      await waitFor(() => {
+        expect(screen.getAllByRole('button', { name: 'Submit for Review' })).toHaveLength(2);
+      });
+    });
+
     it('cannot submit when review has unresolved findings', { timeout: 15000 }, async () => {
       mockGetFindingsWithDecisionsForReview.mockResolvedValueOnce([
         {
