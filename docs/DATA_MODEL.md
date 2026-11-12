@@ -537,3 +537,18 @@ group by s.org_id, s.ref_key, s.category;
 - [ ] Are the open questions answered, with my decision written next to each?
 - [ ] Does every function follow all nine hardening rules, and does each have a negative test (wrong role, wrong org, wrong state)?
 - [ ] Can a user change workflow state in any way other than the ten functions?
+
+
+## 16. Guideline-gap analytics (Improvement 3)
+
+### `guideline_suggestions`
+Stores human-governed wording proposals tied to an organisation, source kit/version, stable rule key, and exact source guideline text/hash. Status is one of `pending`, `accepted`, `rejected`, or `stale`. Evidence stores aggregate counts, dismissal rate, reason-cluster labels/counts, and contributing kit versions only; raw dismissal reasons are not copied into the suggestion record. A partial unique index permits one pending suggestion per source kit/rule.
+
+### `guideline_suggestion_previews`
+Stores a short-lived, one-time, redacted provider request. The reverse placeholder map is encrypted; only its ciphertext is persisted. Policy version/fingerprint, source guideline hash, payload hash, redaction counts, token hash, expiry, and consumption time are retained. The table is backend-only and has no authenticated read policy.
+
+### Versioning and workflow invariants
+- Analytics use the latest decision per finding and only pool historical decisions whose exact guideline wording matches the active rule.
+- Accepting a proposal validates manager/owner membership, pending status, active source kit, source version, and source guideline text.
+- Acceptance locks the organisation row, creates a new kit version, copies all rules/facts, changes only the targeted guideline, activates the new kit, resolves the proposal, and records an audit event in one transaction.
+- The generic `clone_kit` allocator uses the same organisation-row lock to serialize version allocation.

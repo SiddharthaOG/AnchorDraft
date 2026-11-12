@@ -92,7 +92,13 @@ class FakeProvider:
 
         # Build raw JSON if not explicitly provided
         raw_json = self.config.raw_json
-        if raw_json is None:
+        if raw_json is None and "suggested_text" in request.output_schema.get("properties", {}):
+            import json
+            raw_json = json.dumps({
+                "suggested_text": "State the required action clearly and define any important exceptions.",
+                "explanation": "Fake-provider placeholder for local development. Use a configured real provider for a grounded wording proposal.",
+            })
+        elif raw_json is None:
             import json
             findings = [
                 {

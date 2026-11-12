@@ -331,21 +331,25 @@ function ReviewStatusSection({
   findings,
   startingReview,
   handleStartReview,
-  isContentEditable,
+  canStartReview,
+  historicalRevisionVersion,
   reviewActionError,
 }: {
   latestReview: Review | null;
   findings: FindingDisplay[];
   startingReview: boolean;
   handleStartReview: () => void;
-  isContentEditable: boolean;
+  canStartReview: boolean;
+  historicalRevisionVersion: number | null;
   reviewActionError: string | null;
 }) {
   if (!latestReview) {
     return (
       <div className="text-center py-8 text-gray-500">
-        <p>No review started for this revision.</p>
-        {isContentEditable && (
+        <p>{historicalRevisionVersion === null
+          ? 'No review started for this revision.'
+          : 'No review is available for historical Revision ' + historicalRevisionVersion + '.'}</p>
+        {canStartReview && (
           <>
           <button
             type="button"
@@ -380,13 +384,15 @@ function ReviewStatusSection({
       <p className="font-medium text-red-800">Review Failed</p>
       <p className="text-red-600 text-sm mt-1">{latestReview.error || 'Unknown error'}</p>
       {reviewActionError && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">Could not prepare review preview: {reviewActionError}</p>}
-      <button
-        onClick={() => handleStartReview()}
-        disabled={startingReview}
-        className="mt-3 px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary-dark disabled:opacity-50"
-      >
-        {startingReview ? 'Preparing preview...' : 'Preview & Retry'}
-      </button>
+      {canStartReview && (
+        <button
+          onClick={() => handleStartReview()}
+          disabled={startingReview}
+          className="mt-3 px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary-dark disabled:opacity-50"
+        >
+          {startingReview ? 'Preparing preview...' : 'Preview & Retry'}
+        </button>
+      )}
     </div>
   );
 
@@ -488,6 +494,7 @@ export function ContentDetail() {
   const pollTimerRef = useRef<number | null>(null);
   const revisionIdRef = useRef<string | null>(null);
   const reviewRequestIdRef = useRef(0);
+  const previewRequestIdRef = useRef(0);
   const pollGenerationRef = useRef(0);
   const pollInFlightRef = useRef<number | null>(null);
 
@@ -500,17 +507,34 @@ export function ContentDetail() {
 
   // Select a revision for viewing
   const handleSelectRevision = useCallback((revision: Revision) => {
-    if (selectedRevisionId === revision.id) {
-      // Deselect if clicking the same revision, fall back to latest
-      setSelectedRevisionId(latestRevision?.id ?? null);
-      setSelectedRevision(latestRevision);
-    } else {
-      setSelectedRevisionId(revision.id);
-      setSelectedRevision(revision);
+    if (confirmingPreviewRef.current) return;
+    const nextRevision = selectedRevisionId === revision.id ? latestRevision : revision;
+    const nextRevisionId = nextRevision?.id ?? null;
+    // Invalidate in-flight reads, previews, and polling before switching the visible revision.
+    reviewRequestIdRef.current += 1;
+    previewRequestIdRef.current += 1;
+    startingReviewRef.current = false;
+    setStartingReview(false);
+    setReviewPreview(null);
+    setImageConsent(false);
+    setPreviewConfirmError(null);
+    setReviewActionError(null);
+    revisionIdRef.current = nextRevisionId;
+    pollGenerationRef.current += 1;
+    pollInFlightRef.current = null;
+    if (pollTimerRef.current !== null) {
+      window.clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
     }
-  }, [latestRevision]);
+    setLatestReview(null);
+    setFindings([]);
+    setPendingSignoffs(0);
+    setSelectedRevisionId(nextRevisionId);
+    setSelectedRevision(nextRevision);
+  }, [latestRevision, selectedRevisionId]);
 
   useEffect(() => {
+    previewRequestIdRef.current += 1;
     setReviewPreview(null);
     setImageConsent(false);
     setPreviewConfirmError(null);
@@ -559,20 +583,19 @@ export function ContentDetail() {
       // Invalidate all outstanding review-data requests for the previous revision.
       reviewRequestIdRef.current += 1;
       revisionIdRef.current = rev?.id ?? null;
-
-      // Stop any polling associated with the previous revision.
+      pollGenerationRef.current += 1;
+      pollInFlightRef.current = null;
       if (pollTimerRef.current !== null) {
         window.clearInterval(pollTimerRef.current);
         pollTimerRef.current = null;
       }
-
-
       setLatestReview(null);
       setFindings([]);
       setPendingSignoffs(0);
-
       setLatestRevision(rev);
       setRevisions(revs);
+      setSelectedRevisionId(rev?.id ?? null);
+      setSelectedRevision(rev);
     } catch (err) {
       if (currentRequestId !== requestIdRef.current) return;
       setError(err instanceof Error ? err.message : 'Failed to load content');
@@ -584,11 +607,9 @@ export function ContentDetail() {
   }, [contentId, session?.currentOrgId]);
 
   const loadReviewData = useCallback(async (requestedRevisionId?: string) => {
-    const revisionId = requestedRevisionId ?? latestRevision?.id;
-
-    if (!revisionId || pollTimerRef.current !== null) return;
-
-
+    const revisionId = requestedRevisionId ?? selectedRevisionId ?? latestRevision?.id;
+    if (!revisionId) return;
+    revisionIdRef.current = revisionId;
     const requestId = ++reviewRequestIdRef.current;
 
     try {
@@ -640,7 +661,7 @@ export function ContentDetail() {
         err instanceof Error ? err.message : 'Failed to load review data'
       );
     }
-  }, [latestRevision?.id, contentId]);
+  }, [selectedRevisionId, latestRevision?.id, contentId]);
 
 
   // Polling for review status when review is queued or running
@@ -656,8 +677,7 @@ const stopPolling = useCallback(() => {
 }, []);
 
 const startPolling = useCallback(() => {
-  const revisionId = latestRevision?.id;
-
+  const revisionId = revisionIdRef.current;
   if (!revisionId || pollTimerRef.current !== null) return;
 
   // Assign a unique generation to this polling session.
@@ -694,8 +714,6 @@ const startPolling = useCallback(() => {
         return;
       }
 
-      setLatestReview(review);
-
       if (review.status === 'done' || review.status === 'failed') {
         const [findingsData, signoffs] = await Promise.all([
           getFindingsWithDecisionsForReview(review.id),
@@ -710,10 +728,15 @@ const startPolling = useCallback(() => {
           return;
         }
 
+        // Publish terminal status only after its findings have loaded. The
+        // status effect stops polling; publishing it earlier invalidates this
+        // in-flight request and discards the findings response.
         setFindings(findingsData as FindingDisplay[]);
         setPendingSignoffs(signoffs.length);
-
+        setLatestReview(review);
         stopPolling();
+      } else {
+        setLatestReview(review);
       }
     } catch (err) {
       if (
@@ -740,7 +763,7 @@ const startPolling = useCallback(() => {
   pollTimerRef.current = window.setInterval(() => {
     void poll();
   }, 3000);
-}, [latestRevision?.id, contentId, stopPolling]);
+}, [contentId, stopPolling]);
 
 
   // Start/stop polling when review status changes
@@ -844,7 +867,7 @@ const startPolling = useCallback(() => {
   };
 
   const handleSubmit = async () => {
-    if (!content || !latestRevision) return;
+    if (!content || !latestRevision || selectedRevisionId !== latestRevision.id) return;
     if (submittingRef.current) return;
 
     submittingRef.current = true;
@@ -912,22 +935,57 @@ const startPolling = useCallback(() => {
       startingReviewRef.current = false;
       return;
     }
+    if (latestRevision && targetRevisionId !== latestRevision.id) {
+      setReviewActionError('Only the latest revision can be previewed or reviewed.');
+      setStartingReview(false);
+      startingReviewRef.current = false;
+      return;
+    }
 
+    const previewRequestId = ++previewRequestIdRef.current;
     try {
       const preview = await createReviewPreview(targetRevisionId);
+      // A revision switch invalidates this request. Never show a preview
+      // prepared for a revision that is no longer selected.
+      if (
+        previewRequestId !== previewRequestIdRef.current ||
+        revisionIdRef.current !== targetRevisionId ||
+        preview.revision_id !== targetRevisionId
+      ) {
+        return;
+      }
       setReviewPreview(preview);
       setImageConsent(false);
     } catch (err) {
+      if (
+        previewRequestId !== previewRequestIdRef.current ||
+        revisionIdRef.current !== targetRevisionId
+      ) {
+        return;
+      }
       const message = err instanceof Error ? err.message : 'Failed to prepare review preview';
       setReviewActionError(message);
     } finally {
-      setStartingReview(false);
-      startingReviewRef.current = false;
+      if (previewRequestId === previewRequestIdRef.current) {
+        setStartingReview(false);
+        startingReviewRef.current = false;
+      }
     }
   };
 
   const handleConfirmReview = async () => {
     if (!reviewPreview || confirmingPreviewRef.current) return;
+    if (
+      reviewPreview.revision_id !== selectedRevisionId ||
+      reviewPreview.revision_id !== latestRevision?.id ||
+      revisionIdRef.current !== selectedRevisionId
+    ) {
+      setReviewPreview(null);
+      setImageConsent(false);
+      setPreviewConfirmError(null);
+      setReviewActionError('The selected revision changed. Prepare a new review preview for the latest revision.');
+      return;
+    }
     if (reviewPreview.image_consent_required && !imageConsent) {
       setPreviewConfirmError('Explicit image consent is required before this review can start.');
       return;
@@ -995,6 +1053,7 @@ const startPolling = useCallback(() => {
   };
 
   const handleAcceptFinding = async (findingId: string) => {
+    if (!latestRevision || selectedRevisionId !== latestRevision.id) return;
     try {
       await recordDecision(findingId, 'accept');
       await loadReviewData();
@@ -1004,6 +1063,7 @@ const startPolling = useCallback(() => {
   };
 
   const handleDismissFinding = async (findingId: string, reason: string) => {
+    if (!latestRevision || selectedRevisionId !== latestRevision.id) return;
     try {
       await recordDecision(findingId, 'dismiss', reason);
       await loadReviewData();
@@ -1013,7 +1073,7 @@ const startPolling = useCallback(() => {
   };
 
   const handleApplyDecisions = async () => {
-    if (!content) return;
+    if (!content || !latestRevision || selectedRevisionId !== latestRevision.id) return;
     if (applyingDecisionsRef.current) return;
 
     applyingDecisionsRef.current = true;
@@ -1083,13 +1143,15 @@ const startPolling = useCallback(() => {
   }
 
   const isContentEditable = content.status === 'draft' || content.status === 'changes_requested';
+  const isLatestRevisionSelected = !!latestRevision && selectedRevisionId === latestRevision.id;
+  const canEditSelectedRevision = isContentEditable && (!latestRevision ? selectedRevisionId === null : isLatestRevisionSelected);
   const canUploadVisualAssets = session.currentRoles.includes('creator') || session.currentRoles.includes('owner');
   const hasLatestReview = !!latestReview;
   const hasPendingDecisions = findings.some(f => (f.last_action === 'accept' || f.last_action === 'edit') && !f.resulting_revision_id);
   const hasDecisions = findings.some(f => f.last_action);
   // Zero findings is valid - all findings (zero) are decided vacuously
   const allFindingsDecided = findings.every(f => f.last_action);
-  const canSubmit = isContentEditable && hasLatestReview && latestReview?.status === 'done' &&
+  const canSubmit = canEditSelectedRevision && hasLatestReview && latestReview?.status === 'done' &&
     (latestReview.llm_status === 'ok' || latestReview.llm_status === 'skipped') &&
     allFindingsDecided && !hasPendingDecisions;
 
@@ -1155,6 +1217,7 @@ const startPolling = useCallback(() => {
                   <button
                     key={rev.id}
                     onClick={() => handleSelectRevision(rev)}
+                    disabled={confirmingPreview}
                     className={`w-full px-4 py-3 text-left hover:bg-gray-50 transition-colors ${
                       isSelected ? 'bg-primary-50 border-l-2 border-primary' :
                       isLatest ? 'bg-blue-50' :
@@ -1275,7 +1338,8 @@ const startPolling = useCallback(() => {
                 findings={findings}
                 startingReview={startingReview}
                 handleStartReview={handleStartReview}
-                isContentEditable={isContentEditable}
+                canStartReview={canEditSelectedRevision}
+                historicalRevisionVersion={isLatestRevisionSelected ? null : selectedRevision?.version ?? null}
                 reviewActionError={reviewActionError}
               />
             </div>
@@ -1294,7 +1358,7 @@ const startPolling = useCallback(() => {
                     finding={finding}
                     onAccept={() => handleAcceptFinding(finding.id)}
                     onDismiss={() => confirmDismiss(finding)}
-                    isContentEditable={isContentEditable}
+                    isContentEditable={canEditSelectedRevision}
                     hasDecision={!!finding.last_action}
                   />
                 ))}
@@ -1303,7 +1367,7 @@ const startPolling = useCallback(() => {
           )}
 
           {/* Decisions & Actions */}
-          {(hasLatestReview && latestReview?.status === 'done' && isContentEditable) && (
+          {(hasLatestReview && latestReview?.status === 'done' && canEditSelectedRevision) && (
             <div className="bg-white border border-gray-200 rounded-lg p-6 space-y-4">
               <h2 className="font-semibold text-gray-900">Actions</h2>
 
@@ -1446,7 +1510,7 @@ const startPolling = useCallback(() => {
           </div>
 
           {/* Review Actions */}
-          {hasLatestReview && latestReview && latestReview.status === 'done' && latestReview.llm_status === 'failed' && (
+          {hasLatestReview && latestReview && latestReview.status === 'done' && latestReview.llm_status === 'failed' && canEditSelectedRevision && (
             <div className="bg-white border border-gray-200 rounded-lg p-6 space-y-4">
               <h3 className="font-semibold text-gray-900">LLM Processing Failed</h3>
               <p className="text-sm text-gray-600">
