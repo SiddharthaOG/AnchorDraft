@@ -106,6 +106,11 @@ class GeminiProvider:
                 else:
                     raise ValueError("Gemini response_schema supports only single-type nullable unions")
 
+            # response_schema uses the OpenAPI Schema enum spelling (STRING,
+            # NUMBER, OBJECT, ARRAY), unlike the lowercase JSON Schema input.
+            if isinstance(obj.get("type"), str):
+                obj["type"] = obj["type"].upper()
+
             # Recursively adapt nested objects
             if "properties" in obj:
                 for prop_name, prop_schema in obj["properties"].items():

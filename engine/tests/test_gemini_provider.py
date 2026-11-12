@@ -137,9 +137,9 @@ class TestGeminiSchemaAdaptation:
         suggestion = adapted["properties"]["findings"]["items"]["properties"]["suggestion"]
         confidence = adapted["properties"]["findings"]["items"]["properties"]["confidence"]
 
-        assert suggestion["type"] == "string"
+        assert suggestion["type"] == "STRING"
         assert suggestion["nullable"] is True
-        assert confidence["type"] == "number"
+        assert confidence["type"] == "NUMBER"
         assert confidence["nullable"] is True
 
     def test_adapt_schema_preserves_enum(self):
@@ -572,7 +572,7 @@ class TestGeminiErrorMapping:
         config = mock_generate.await_args.kwargs["config"]
         assert not hasattr(config, "response_json_schema")
         assert config.response_schema["properties"]["findings"]["items"]["properties"]["suggestion"] == {
-            "type": "string", "nullable": True
+            "type": "STRING", "nullable": True
         }
 
 
