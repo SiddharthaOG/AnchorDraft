@@ -10,6 +10,7 @@ export function Layout() {
   const navigation = [
     { path: '/', label: 'Dashboard', roles: ['creator', 'manager', 'reviewer', 'owner'] },
     { path: '/owner', label: 'Owner Dashboard', roles: ['owner'] },
+    { path: '/owner/confidentiality', label: 'Confidentiality', roles: ['owner'] },
     { path: '/kits', label: 'Brand Kits', roles: ['owner'] },
     { path: '/approvals', label: 'Approvals', roles: ['manager', 'owner'] },
     { path: '/review', label: 'Review Queue', roles: ['reviewer', 'owner'] },

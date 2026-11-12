@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.auth.dependencies import AuthUser, require_owner
@@ -78,8 +78,13 @@ def _safe_policy(record: dict | None, org_id: str) -> dict:
 
 
 @router.get("")
-async def get_confidentiality_policy(user: Annotated[AuthUser, Depends(require_owner)]) -> dict:
+async def get_confidentiality_policy(
+    response: Response,
+    user: Annotated[AuthUser, Depends(require_owner)],
+) -> dict:
     """Return this owner's organization policy, including safe defaults."""
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
     supabase = get_supabase_client()
     policy = await ConfidentialityPolicyStore(supabase).load_policy(user.org_id)
     return _safe_policy({
@@ -93,9 +98,12 @@ async def get_confidentiality_policy(user: Annotated[AuthUser, Depends(require_o
 @router.put("")
 async def update_confidentiality_policy(
     payload: ConfidentialityPolicyUpdate,
+    response: Response,
     user: Annotated[AuthUser, Depends(require_owner)],
 ) -> dict:
     """Create or replace this organization's policy; DB trigger increments version."""
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
     supabase = get_supabase_client()
     values = payload.model_dump()
     values.update({"org_id": user.org_id, "updated_by": user.user_id})

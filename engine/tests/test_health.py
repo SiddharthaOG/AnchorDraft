@@ -60,7 +60,7 @@ class TestCORS:
         # The key check is that wildcard is not used
         assert "*" not in options.get("allow_origins", []), "Wildcard not allowed in CORS origins"
         assert options.get("allow_credentials") is True
-        assert set(options.get("allow_methods", [])) == {"GET", "POST", "OPTIONS"}
+        assert set(options.get("allow_methods", [])) == {"GET", "POST", "PUT", "OPTIONS"}
         # Check allowed headers include X-Request-Id, Authorization, Content-Type
         assert "X-Request-Id" in options.get("allow_headers", [])
         assert "Authorization" in options.get("allow_headers", [])

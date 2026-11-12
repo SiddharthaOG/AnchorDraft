@@ -10,6 +10,7 @@ import { ContentDetail } from '../features/contents/ContentDetail';
 import { ManagerLanding } from '../features/approvals/ManagerLanding';
 import { ReviewerLanding } from '../features/findings/ReviewerLanding';
 import { OwnerLanding } from '../features/kits/OwnerLanding';
+import { ConfidentialitySettings } from '../features/kits/ConfidentialitySettings';
 import { KitList } from '../features/kits/KitList';
 import { KitDetail } from '../features/kits/KitDetail';
 import { InsightsLanding } from '../features/insights/InsightsLanding';
@@ -237,6 +238,14 @@ export const router = createBrowserRouter([
         element: (
           <RoleRoute allowedRoles={['owner']}>
             <OwnerLanding />
+          </RoleRoute>
+        ),
+      },
+      {
+        path: 'owner/confidentiality',
+        element: (
+          <RoleRoute allowedRoles={['owner']}>
+            <ConfidentialitySettings />
           </RoleRoute>
         ),
       },
