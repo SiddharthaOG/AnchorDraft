@@ -17,6 +17,30 @@ from app.checks.deterministic import RuleConfig
 router = APIRouter()
 
 
+def _resolve_deterministic_check_type(config: dict) -> str | None:
+    """Resolve explicit or legacy deterministic check configuration.
+
+    Older seeded kits omit the check discriminator. Infer only when exactly
+    one supported check's required-key signature matches; ambiguous shapes
+    fail closed rather than guessing.
+    """
+    declared = config.get("check")
+    if declared is not None:
+        return declared if isinstance(declared, str) and declared in check_map else None
+
+    signatures = {
+        "term_map": {"entries"},
+        "phrase_list": {"phrases"},
+        "missing_alt_text": {"min_length", "generic"},
+        "required_disclosure": {"when_any", "require_any"},
+    }
+    matches = [
+        name for name, required_keys in signatures.items()
+        if required_keys.issubset(config.keys())
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 class _VisualGuidelineModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -254,16 +278,21 @@ async def lint_kit(
                     "message": "Deterministic rule config must be a dictionary",
                 })
             else:
-                check_type = raw_config.get("check")
+                check_type = _resolve_deterministic_check_type(raw_config)
 
-                if not isinstance(check_type, str) or check_type not in check_map:
+                if check_type is None:
+                    declared_check = raw_config.get("check")
                     issues.append({
                         "severity": "error",
                         "code": "UNKNOWN_CHECK_TYPE",
                         "ref_key": rule_key,
-                        "message": f"Unknown deterministic check type: {check_type!r}",
+                        "message": f"Unknown or ambiguous deterministic check type: {declared_check!r}",
                     })
                 else:
+                    # Normalize legacy configurations in memory so downstream
+                    # lint limits and validators use the same resolved type.
+                    raw_config = {**raw_config, "check": check_type}
+                    rule["config"] = raw_config
                     try:
                         checker = check_map[check_type](RuleConfig(
                             check=check_type,
