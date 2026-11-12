@@ -4,6 +4,7 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../features/auth/AuthProvider';
 import { LoadingScreen } from '../../components/LoadingScreen';
+import { VisualGuidelinesEditor } from './VisualGuidelinesEditor';
 import {
   getBrandKits,
   getKitRules,
@@ -18,6 +19,8 @@ import {
   deleteFact,
   lintKit,
   type BrandKit,
+  type VisualGuidelines,
+  updateKitVisualGuidelines,
   type Rule,
   type ApprovedFact,
   type KitLintResponse,
@@ -807,6 +810,18 @@ export function KitDetail() {
     }
   };
 
+  const handleSaveVisualGuidelines = async (visualGuidelines: VisualGuidelines) => {
+    if (!kit) throw new Error('Kit is not available');
+    beginMutation();
+    try {
+      const saved = await updateKitVisualGuidelines(kit.id, visualGuidelines);
+      setKit(current => current ? { ...current, visual_guidelines: saved } : current);
+      return saved;
+    } finally {
+      endMutation();
+    }
+  };
+
   const handleDeleteFact = async (factId: string) => {
     beginMutation();
     try {
@@ -957,6 +972,14 @@ export function KitDetail() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main content */}
         <div className="lg:col-span-2 space-y-6">
+          <VisualGuidelinesEditor
+            kitId={kit.id}
+            initialValue={kit.visual_guidelines}
+            editable={isDraft}
+            saving={pendingMutations > 0}
+            onSave={handleSaveVisualGuidelines}
+          />
+
           {/* Rules section */}
           <div className="bg-white border border-gray-200 rounded-lg">
             <div className="p-4 border-b border-gray-200 flex items-center justify-between">
