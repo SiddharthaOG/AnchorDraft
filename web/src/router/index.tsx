@@ -205,12 +205,12 @@ export const router = createBrowserRouter([
     path: '/',
     element: <RootLayout />,
     children: [
-      // Creator routes (default dashboard)
+      // Role-aware dashboard: each role lands on its own workspace.
       {
         index: true,
         element: (
           <RoleRoute allowedRoles={['creator', 'manager', 'reviewer', 'owner']}>
-            <CreatorLanding />
+            <RoleDashboard />
           </RoleRoute>
         ),
       },
