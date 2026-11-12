@@ -46,11 +46,13 @@ class ProviderSettings:
     # Groq settings
     groq_api_key: Optional[str] = None
     groq_model: str = "openai/gpt-oss-120b"
+    groq_vision_model: str = "qwen/qwen3.8-27b"
     groq_tpm_limit: int = 8000
     groq_rpm_limit: int = 30
     # Gemini settings
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-3.8-flash"
+    gemini_fallback_model: str = "gemini-3.6-flash"
     gemini_tpm_limit: int = 250000
     gemini_rpm_limit: int = 15
     # Fallback settings
@@ -147,10 +149,12 @@ def load_provider_settings() -> ProviderSettings:
         provider_type=provider_type,
         groq_api_key=getattr(settings, "GROQ_API_KEY", None),
         groq_model=getattr(settings, "GROQ_MODEL", "openai/gpt-oss-120b"),
+        groq_vision_model=getattr(settings, "GROQ_VISION_MODEL", "qwen/qwen3.8-27b"),
         groq_tpm_limit=getattr(settings, "GROQ_TPM_LIMIT", 8000),
         groq_rpm_limit=getattr(settings, "GROQ_RPM_LIMIT", 30),
         gemini_api_key=getattr(settings, "GEMINI_API_KEY", None),
         gemini_model=getattr(settings, "GEMINI_MODEL", "gemini-3.8-flash"),
+        gemini_fallback_model=getattr(settings, "GEMINI_FALLBACK_MODEL", "gemini-3.6-flash"),
         gemini_tpm_limit=getattr(settings, "GEMINI_TPM_LIMIT", 250000),
         gemini_rpm_limit=getattr(settings, "GEMINI_RPM_LIMIT", 15),
         fallback_enabled=getattr(settings, "LLM_FALLBACK_ENABLED", True),
@@ -228,10 +232,34 @@ def create_fallback_provider(settings: Optional[ProviderSettings] = None) -> Opt
         settings = load_provider_settings()
 
     if not settings.fallback_enabled:
+        logger.warning(
+            "provider_fallback_not_configured",
+            extra={
+                "reason": "disabled_by_configuration",
+                "primary_provider": settings.provider_type.value,
+                "fallback_provider": settings.fallback_provider.value,
+            },
+        )
         return None
 
-    # Don't create fallback if it's the same as primary
-    if settings.fallback_provider == settings.provider_type:
+    # A same-provider fallback is useful only when it targets a distinct model.
+    # Gemini supports this path so transient capacity failures on the primary model
+    # can fail over without requiring a second vendor credential.
+    same_provider = settings.fallback_provider == settings.provider_type
+    if same_provider and (
+        settings.fallback_provider != ProviderType.GEMINI
+        or settings.gemini_fallback_model == settings.gemini_model
+    ):
+        logger.warning(
+            "provider_fallback_not_configured",
+            extra={
+                "reason": "same_provider_model",
+                "primary_provider": settings.provider_type.value,
+                "fallback_provider": settings.fallback_provider.value,
+                "primary_model": settings.gemini_model if settings.provider_type == ProviderType.GEMINI else settings.groq_model,
+                "fallback_model": settings.gemini_fallback_model if settings.fallback_provider == ProviderType.GEMINI else settings.groq_model,
+            },
+        )
         return None
 
     # Defensive check: fake fallback should not be created in non-local environments
@@ -262,7 +290,11 @@ def create_fallback_provider(settings: Optional[ProviderSettings] = None) -> Opt
                 return None
             return GeminiProvider(
                 api_key=settings.gemini_api_key,
-                model=settings.gemini_model,
+                model=(
+                    settings.gemini_fallback_model
+                    if settings.fallback_provider == ProviderType.GEMINI
+                    else settings.gemini_model
+                ),
                 tpm_limit=settings.gemini_tpm_limit,
                 rpm_limit=settings.gemini_rpm_limit,
             )
@@ -462,35 +494,66 @@ class ProviderWithFallback:
             ProviderError: If both primary and fallback fail.
             TimeoutError: If overall deadline expires.
         """
-        # Establish single overall deadline
-        overall_deadline = time.monotonic() + request.timeout_seconds
+        # Establish single overall deadline and per-attempt timing.
+        operation_started = time.monotonic()
+        overall_deadline = operation_started + request.timeout_seconds
+        primary_started = time.monotonic()
+
+        logger.info(
+            "provider_primary_attempt",
+            extra={
+                "primary_model": self.primary_model,
+                "fallback_available": self._fallback is not None,
+                "overall_timeout_seconds": request.timeout_seconds,
+            },
+        )
 
         # Try primary provider
         try:
             remaining = self._check_deadline(overall_deadline, "primary attempt")
+            # A provider that hangs must not consume the entire operation deadline:
+            # reserve 35% (at least MIN_FALLBACK_TIME_SECONDS + scheduling margin)
+            # for the configured fallback. Without a fallback, preserve the full
+            # timeout for primary.
+            primary_budget = remaining
+            if self._fallback:
+                fallback_reserve = min(
+                    remaining * 0.8,
+                    max(self.MIN_FALLBACK_TIME_SECONDS + 0.1, remaining * 0.35),
+                )
+                primary_budget = max(0.1, remaining - fallback_reserve)
             primary_request = ProviderRequest(
                 system_instruction=request.system_instruction,
                 user_content=request.user_content,
                 output_schema=request.output_schema,
                 randomness=request.randomness,
                 output_limit=request.output_limit,
-                timeout_seconds=max(1, min(request.timeout_seconds, int(remaining))),
+                timeout_seconds=max(1, min(request.timeout_seconds, int(primary_budget))),
             )
             result = await asyncio.wait_for(
                 self._invoke_provider(self._primary, primary_request, images),
-                timeout=remaining,
+                timeout=primary_budget,
             )
             logger.info(
                 "provider_primary_success",
-                extra={"model": self.primary_model},
+                extra={
+                    "model": self.primary_model,
+                    "attempt_duration_ms": int((time.monotonic() - primary_started) * 1000),
+                    "total_elapsed_ms": int((time.monotonic() - operation_started) * 1000),
+                },
             )
             return result
 
         except asyncio.TimeoutError:
-            primary_error = TimeoutError(f"Primary provider timed out after {remaining:.1f}s")
+            primary_error = TimeoutError(f"Primary provider timed out after {primary_budget:.1f}s")
             logger.warning(
                 "provider_primary_timeout",
-                extra={"model": self.primary_model, "remaining_seconds": remaining},
+                extra={
+                    "model": self.primary_model,
+                    "primary_budget_seconds": round(primary_budget, 3),
+                    "attempt_duration_ms": int((time.monotonic() - primary_started) * 1000),
+                    "total_elapsed_ms": int((time.monotonic() - operation_started) * 1000),
+                },
             )
 
             # Check if we should attempt fallback
@@ -513,6 +576,7 @@ class ProviderWithFallback:
                     extra={
                         "primary_model": self.primary_model,
                         "fallback_model": self.fallback_model,
+                        "fallback_budget_seconds": round(remaining_after_primary, 3),
                     },
                 )
 
@@ -576,14 +640,18 @@ class ProviderWithFallback:
         except Exception as primary_error:
             logger.warning(
                 "provider_primary_failed",
-                extra=self._sanitize_error_for_log(primary_error) | {"model": self.primary_model},
+                extra=self._sanitize_error_for_log(primary_error) | {
+                    "model": self.primary_model,
+                    "attempt_duration_ms": int((time.monotonic() - primary_started) * 1000),
+                    "total_elapsed_ms": int((time.monotonic() - operation_started) * 1000),
+                },
             )
 
             # Check if we should attempt fallback
             if self._fallback and self._should_fallback(primary_error):
-                # Check if there's enough time for a fallback attempt
+                # Check if there's enough time for a fallback attempt.
+                remaining_after_primary = overall_deadline - time.monotonic()
                 if isinstance(primary_error, TimeoutError):
-                    remaining_after_primary = overall_deadline - time.monotonic()
                     if remaining_after_primary < self.MIN_FALLBACK_TIME_SECONDS:
                         logger.warning(
                             "provider_fallback_skipped_insufficient_time",
@@ -600,6 +668,7 @@ class ProviderWithFallback:
                     extra={
                         "primary_model": self.primary_model,
                         "fallback_model": self.fallback_model,
+                        "fallback_budget_seconds": round(remaining_after_primary, 3),
                     },
                 )
 
@@ -679,6 +748,7 @@ def create_vision_provider(settings: Optional[ProviderSettings] = None):
             raise ProviderConfigError("GROQ_API_KEY is required for Groq vision provider")
         return GroqVisionProvider(
             api_key=settings.groq_api_key,
+            model=settings.groq_vision_model,
             tpm_limit=settings.groq_tpm_limit,
             rpm_limit=settings.groq_rpm_limit,
         )
@@ -698,7 +768,13 @@ def create_fallback_vision_provider(settings: Optional[ProviderSettings] = None)
     """Create the configured vision fallback, if enabled and distinct."""
     if settings is None:
         settings = load_provider_settings()
-    if not settings.fallback_enabled or settings.fallback_provider == settings.provider_type:
+    same_provider = settings.fallback_provider == settings.provider_type
+    if not settings.fallback_enabled or (
+        same_provider and (
+            settings.fallback_provider != ProviderType.GEMINI
+            or settings.gemini_fallback_model == settings.gemini_model
+        )
+    ):
         return None
 
     from app.visual.vision_providers import (
@@ -716,6 +792,7 @@ def create_fallback_vision_provider(settings: Optional[ProviderSettings] = None)
                 return None
             return GroqVisionProvider(
                 api_key=settings.groq_api_key,
+                model=settings.groq_vision_model,
                 tpm_limit=settings.groq_tpm_limit,
                 rpm_limit=settings.groq_rpm_limit,
             )
@@ -725,7 +802,11 @@ def create_fallback_vision_provider(settings: Optional[ProviderSettings] = None)
                 return None
             return GeminiVisionProvider(
                 api_key=settings.gemini_api_key,
-                model=settings.gemini_model,
+                model=(
+                    settings.gemini_fallback_model
+                    if settings.fallback_provider == ProviderType.GEMINI
+                    else settings.gemini_model
+                ),
                 tpm_limit=settings.gemini_tpm_limit,
                 rpm_limit=settings.gemini_rpm_limit,
             )
@@ -743,6 +824,17 @@ def get_vision_provider_with_fallback() -> ProviderWithFallback:
     settings = load_provider_settings()
     primary = create_vision_provider(settings)
     fallback = create_fallback_vision_provider(settings)
+    logger.info(
+        "vision_provider_pair_configured",
+        extra={
+            "primary_provider": settings.provider_type.value,
+            "primary_model": getattr(primary, "model", "unknown"),
+            "fallback_enabled": settings.fallback_enabled,
+            "fallback_provider": settings.fallback_provider.value,
+            "fallback_model": getattr(fallback, "model", None) if fallback else None,
+            "fallback_available": fallback is not None,
+        },
+    )
     return ProviderWithFallback(primary=primary, fallback=fallback)
 
 
@@ -761,7 +853,17 @@ def get_provider_with_fallback() -> ProviderWithFallback:
     settings = load_provider_settings()
     primary = create_provider(settings)
     fallback = create_fallback_provider(settings)
-
+    logger.info(
+        "provider_pair_configured",
+        extra={
+            "primary_provider": settings.provider_type.value,
+            "primary_model": getattr(primary, "model", "unknown"),
+            "fallback_enabled": settings.fallback_enabled,
+            "fallback_provider": settings.fallback_provider.value,
+            "fallback_model": getattr(fallback, "model", None) if fallback else None,
+            "fallback_available": fallback is not None,
+        },
+    )
     return ProviderWithFallback(primary=primary, fallback=fallback)
 
 
