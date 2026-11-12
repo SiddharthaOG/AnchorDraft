@@ -494,6 +494,7 @@ export function ContentDetail() {
   const pollTimerRef = useRef<number | null>(null);
   const revisionIdRef = useRef<string | null>(null);
   const reviewRequestIdRef = useRef(0);
+  const previewRequestIdRef = useRef(0);
   const pollGenerationRef = useRef(0);
   const pollInFlightRef = useRef<number | null>(null);
 
@@ -506,10 +507,18 @@ export function ContentDetail() {
 
   // Select a revision for viewing
   const handleSelectRevision = useCallback((revision: Revision) => {
+    if (confirmingPreviewRef.current) return;
     const nextRevision = selectedRevisionId === revision.id ? latestRevision : revision;
     const nextRevisionId = nextRevision?.id ?? null;
-    // Invalidate in-flight reads and polling before switching the visible revision.
+    // Invalidate in-flight reads, previews, and polling before switching the visible revision.
     reviewRequestIdRef.current += 1;
+    previewRequestIdRef.current += 1;
+    startingReviewRef.current = false;
+    setStartingReview(false);
+    setReviewPreview(null);
+    setImageConsent(false);
+    setPreviewConfirmError(null);
+    setReviewActionError(null);
     revisionIdRef.current = nextRevisionId;
     pollGenerationRef.current += 1;
     pollInFlightRef.current = null;
@@ -525,6 +534,7 @@ export function ContentDetail() {
   }, [latestRevision, selectedRevisionId]);
 
   useEffect(() => {
+    previewRequestIdRef.current += 1;
     setReviewPreview(null);
     setImageConsent(false);
     setPreviewConfirmError(null);
@@ -932,21 +942,50 @@ const startPolling = useCallback(() => {
       return;
     }
 
+    const previewRequestId = ++previewRequestIdRef.current;
     try {
       const preview = await createReviewPreview(targetRevisionId);
+      // A revision switch invalidates this request. Never show a preview
+      // prepared for a revision that is no longer selected.
+      if (
+        previewRequestId !== previewRequestIdRef.current ||
+        revisionIdRef.current !== targetRevisionId ||
+        preview.revision_id !== targetRevisionId
+      ) {
+        return;
+      }
       setReviewPreview(preview);
       setImageConsent(false);
     } catch (err) {
+      if (
+        previewRequestId !== previewRequestIdRef.current ||
+        revisionIdRef.current !== targetRevisionId
+      ) {
+        return;
+      }
       const message = err instanceof Error ? err.message : 'Failed to prepare review preview';
       setReviewActionError(message);
     } finally {
-      setStartingReview(false);
-      startingReviewRef.current = false;
+      if (previewRequestId === previewRequestIdRef.current) {
+        setStartingReview(false);
+        startingReviewRef.current = false;
+      }
     }
   };
 
   const handleConfirmReview = async () => {
     if (!reviewPreview || confirmingPreviewRef.current) return;
+    if (
+      reviewPreview.revision_id !== selectedRevisionId ||
+      reviewPreview.revision_id !== latestRevision?.id ||
+      revisionIdRef.current !== selectedRevisionId
+    ) {
+      setReviewPreview(null);
+      setImageConsent(false);
+      setPreviewConfirmError(null);
+      setReviewActionError('The selected revision changed. Prepare a new review preview for the latest revision.');
+      return;
+    }
     if (reviewPreview.image_consent_required && !imageConsent) {
       setPreviewConfirmError('Explicit image consent is required before this review can start.');
       return;
@@ -1178,6 +1217,7 @@ const startPolling = useCallback(() => {
                   <button
                     key={rev.id}
                     onClick={() => handleSelectRevision(rev)}
+                    disabled={confirmingPreview}
                     className={`w-full px-4 py-3 text-left hover:bg-gray-50 transition-colors ${
                       isSelected ? 'bg-primary-50 border-l-2 border-primary' :
                       isLatest ? 'bg-blue-50' :

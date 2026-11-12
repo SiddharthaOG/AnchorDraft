@@ -733,6 +733,71 @@ describe('ContentDetail', () => {
       expect(screen.queryByRole('button', { name: 'Start Review' })).not.toBeInTheDocument();
       expect(mockCreateReviewPreview).not.toHaveBeenCalled();
     });
+
+    it('discards a delayed preview response when the user switches to a historical revision', { timeout: 15000 }, async () => {
+      const historicalRevision = { ...defaultRevision, id: 'revision-0', version: 0 };
+      let resolvePreview!: (preview: any) => void;
+      const delayedPreview = new Promise(resolve => { resolvePreview = resolve; });
+
+      mockGetLatestRevision.mockResolvedValue(defaultRevision);
+      mockGetRevisions.mockResolvedValue([defaultRevision, historicalRevision]);
+      mockGetLatestReviewForRevision.mockResolvedValue(null);
+      mockCreateReviewPreview.mockReturnValueOnce(delayedPreview);
+
+      await renderAndWaitForLoad(<ContentDetail />);
+      fireEvent.click(screen.getByRole('button', { name: 'Start Review' }));
+      await waitFor(() => expect(mockCreateReviewPreview).toHaveBeenCalledWith(defaultRevision.id));
+
+      fireEvent.click(screen.getByRole('button', { name: /Revision 0/ }));
+      expect(await screen.findByText('No review is available for historical Revision 0.')).toBeInTheDocument();
+
+      await act(async () => {
+        resolvePreview({
+          preview_id: 'stale-preview',
+          revision_id: defaultRevision.id,
+          confirmation_token: 'stale-token',
+          expires_at: '2026-11-12T12:10:00Z',
+          redacted_draft: 'Stale preview',
+          text_provider_preview: { system_instruction: 'Review', user_content: 'Stale' },
+          vision_provider_preview: null,
+          assets: [],
+          image_consent_required: false,
+          redaction_summary: { total_matches: 0, by_type: {}, original_chars: 5, redacted_chars: 5, policy_version: 1 },
+          payload_sha256: 'c'.repeat(64),
+        });
+        await delayedPreview;
+      });
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Confirm & Run Review' })).not.toBeInTheDocument();
+      expect(mockConfirmReviewPreview).not.toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: 'Start Review' })).not.toBeInTheDocument();
+    });
+
+    it('closes an open preview and clears image consent when switching revisions', { timeout: 15000 }, async () => {
+      const historicalRevision = { ...defaultRevision, id: 'revision-0', version: 0 };
+      mockGetLatestRevision.mockResolvedValue(defaultRevision);
+      mockGetRevisions.mockResolvedValue([defaultRevision, historicalRevision]);
+      mockGetLatestReviewForRevision.mockResolvedValue(null);
+
+      await renderAndWaitForLoad(<ContentDetail />);
+      fireEvent.click(screen.getByRole('button', { name: 'Start Review' }));
+      await screen.findByRole('dialog');
+
+      const consent = screen.getByRole('checkbox', {
+        name: /explicitly consent to sending them in their stored form/i,
+      });
+      fireEvent.click(consent);
+      expect(consent).toBeChecked();
+
+      fireEvent.click(screen.getByRole('button', { name: /Revision 0/ }));
+      expect(await screen.findByText('No review is available for historical Revision 0.')).toBeInTheDocument();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', {
+        name: /explicitly consent to sending them in their stored form/i,
+      })).not.toBeInTheDocument();
+      expect(mockConfirmReviewPreview).not.toHaveBeenCalled();
+    });
   });
 
   describe('Existing safeguards preserved', () => {
