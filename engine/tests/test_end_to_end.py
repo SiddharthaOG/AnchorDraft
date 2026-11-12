@@ -1562,6 +1562,7 @@ class TestFullPipelineOrchestration:
         mock_det_checks.assert_called_once()
         mock_model.assert_called_once()
         mock_validate.assert_called_once()
+        assert mock_validate.await_args.args[1] == mock_loader.load_review_input.return_value.kit_id
 
         # 6. Verify persistence was called with correct claim token
         mock_persist.assert_called_once()

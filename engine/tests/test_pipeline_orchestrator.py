@@ -949,3 +949,32 @@ class TestNullTokenRejection:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+class TestValidationKitIdPropagation:
+    @pytest.mark.asyncio
+    async def test_validation_context_receives_actual_kit_uuid(self):
+        from app.validator import ValidationContext
+        orchestrator = ReviewOrchestrator.__new__(ReviewOrchestrator)
+        orchestrator.loader = MagicMock()
+        orchestrator.loader.load_validation_context.return_value = ValidationContext(
+            all_rules=[], all_facts=[], model_offered_rule_keys=set(), model_offered_fact_keys=set()
+        )
+        kit_id = str(uuid4())
+        await orchestrator._run_validation(
+            text="A sample draft", kit_id=kit_id,
+            deterministic_candidates=[], model_candidates=[], rules=[], facts=[],
+            model_offered_rules=set(), model_offered_facts=set(),
+        )
+        assert orchestrator.loader.load_validation_context.call_args.kwargs["kit_id"] == kit_id
+
+    @pytest.mark.asyncio
+    async def test_validation_rejects_missing_kit_id_before_database_lookup(self):
+        orchestrator = ReviewOrchestrator.__new__(ReviewOrchestrator)
+        orchestrator.loader = MagicMock()
+        with pytest.raises(ValueError, match="kit_id is required"):
+            await orchestrator._run_validation(
+                text="A sample draft", kit_id="",
+                deterministic_candidates=[], model_candidates=[], rules=[], facts=[],
+                model_offered_rules=set(), model_offered_facts=set(),
+            )
+        orchestrator.loader.load_validation_context.assert_not_called()

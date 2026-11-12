@@ -525,6 +525,7 @@ class ReviewOrchestrator:
     async def _run_validation(
         self,
         text: str,
+        kit_id: str,
         deterministic_candidates: list,
         model_candidates: list,
         rules: list,
@@ -536,8 +537,10 @@ class ReviewOrchestrator:
         visual_model_offered_rules: set = None,
     ) -> AggregateValidationResult:
         """Run citation validator on all candidates."""
+        if not kit_id:
+            raise ValueError("kit_id is required for citation validation")
         context = self.loader.load_validation_context(
-            kit_id="",  # We'll pass the kit_id separately
+            kit_id=kit_id,
             model_offered_rule_keys=model_offered_rules,
             model_offered_fact_keys=model_offered_facts,
         )
@@ -935,6 +938,7 @@ class ReviewOrchestrator:
             # 7. Run validation
             validation_result = await self._run_validation(
                 pipeline_input.revision_text,
+                pipeline_input.kit_id,
                 deterministic_candidates,
                 model_candidates,
                 rules,
