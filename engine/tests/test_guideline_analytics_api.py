@@ -2,6 +2,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 from cryptography.fernet import Fernet
@@ -26,15 +27,19 @@ class FakePool:
     def __init__(self):
         self.conn = FakeConnection()
         self.pool = self
+        self.fetch_calls = []
+        self.fetchrow_calls = []
 
     @asynccontextmanager
     async def acquire(self):
         yield self.conn
 
     async def fetchrow(self, query, *args):
+        self.fetchrow_calls.append((query, args))
         return {"id": "kit-1", "version": 3, "name": "Test Kit"}
 
     async def fetch(self, query, *args):
+        self.fetch_calls.append((query, args))
         if "select rule_key, category::text as category" in query:
             return [{
                 "rule_key": "CLAIM-01",
@@ -266,3 +271,102 @@ async def test_fake_provider_returns_explicit_placeholder_for_suggestion_schema(
 
     assert output["suggested_text"]
     assert "Fake-provider placeholder" in output["explanation"]
+
+
+@pytest.mark.asyncio
+async def test_rule_history_uses_only_completed_reviews_and_scopes_to_kit_org():
+    pool = FakePool()
+    await api._rule_history(pool, "kit-1")
+
+    query, args = pool.fetch_calls[0]
+    assert "review_record.status = 'done'" in query
+    assert "source_kit.org_id = active_rule.org_id" in query
+    assert "source_kit.org_id = (select org_id from public.brand_kits where id = $1)" in query
+    assert args == ("kit-1",)
+
+
+@pytest.mark.asyncio
+async def test_analytics_query_is_scoped_to_authenticated_organization():
+    pool = FakePool()
+    user = AuthUser(
+        "00000000-0000-0000-0000-000000000005",
+        "00000000-0000-0000-0000-000000000099",
+        ["manager"],
+    )
+
+    result = await api.list_guideline_gaps(user, pool)
+
+    assert result["kit"]["id"] == "kit-1"
+    query, args = pool.fetchrow_calls[0]
+    assert "where org_id = $1 and status = 'active'" in query
+    assert args == (user.org_id,)
+
+
+@pytest.mark.asyncio
+async def test_accept_endpoint_passes_verified_actor_to_service_rpc():
+    from types import SimpleNamespace
+
+    suggestion_id = UUID("00000000-0000-0000-0000-000000000099")
+    user = AuthUser(
+        "00000000-0000-0000-0000-000000000005",
+        "00000000-0000-0000-0000-000000000001",
+        ["manager"],
+    )
+    pool = SimpleNamespace(fetchrow=AsyncMock(return_value={
+        "kit_id": "new-kit",
+        "version": 5,
+        "status": "accepted",
+    }))
+
+    result = await api.accept_suggestion(suggestion_id, user, pool)
+
+    assert result == {"status": "accepted", "kit_id": "new-kit", "version": 5}
+    query, suggestion_arg, actor_arg = pool.fetchrow.await_args.args
+    assert "accept_guideline_suggestion($1, $2)" in query
+    assert suggestion_arg == suggestion_id
+    assert actor_arg == user.user_id
+
+
+@pytest.mark.asyncio
+async def test_reject_endpoint_passes_verified_actor_and_bounded_reason_to_service_rpc():
+    from types import SimpleNamespace
+
+    suggestion_id = UUID("00000000-0000-0000-0000-000000000098")
+    user = AuthUser(
+        "00000000-0000-0000-0000-000000000005",
+        "00000000-0000-0000-0000-000000000001",
+        ["owner"],
+    )
+    pool = SimpleNamespace(fetchrow=AsyncMock(return_value={"status": "rejected"}))
+    body = api.RejectSuggestionRequest(reason="This changes the approved meaning.")
+
+    result = await api.reject_suggestion(suggestion_id, body, user, pool)
+
+    assert result == {"status": "rejected"}
+    query, suggestion_arg, actor_arg, reason_arg = pool.fetchrow.await_args.args
+    assert "reject_guideline_suggestion($1, $2, $3)" in query
+    assert suggestion_arg == suggestion_id
+    assert actor_arg == user.user_id
+    assert reason_arg == body.reason
+
+
+@pytest.mark.asyncio
+async def test_accept_endpoint_reports_stale_suggestion_as_conflict():
+    from types import SimpleNamespace
+
+    suggestion_id = UUID("00000000-0000-0000-0000-000000000097")
+    user = AuthUser(
+        "00000000-0000-0000-0000-000000000005",
+        "00000000-0000-0000-0000-000000000001",
+        ["manager"],
+    )
+    pool = SimpleNamespace(fetchrow=AsyncMock(return_value={
+        "kit_id": None,
+        "version": None,
+        "status": "stale",
+    }))
+
+    with pytest.raises(HTTPException) as exc:
+        await api.accept_suggestion(suggestion_id, user, pool)
+    assert exc.value.status_code == 409
+    assert exc.value.detail["error"]["code"] == "suggestion_stale"

@@ -136,6 +136,63 @@ export function GuidelineGapPanel() {
       {!isLoading && analytics && !analytics.kit && (
         <p className="text-sm text-gray-500">No active brand kit is available for this organisation.</p>
       )}
+      {analytics?.kit && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" aria-label="Guideline feedback summary">
+            <div className="rounded-lg border border-gray-200 p-3">
+              <p className="text-xs text-gray-500">Active guidelines</p>
+              <p className="mt-1 text-xl font-semibold text-gray-900">{analytics.rules.length}</p>
+            </div>
+            <div className="rounded-lg border border-gray-200 p-3">
+              <p className="text-xs text-gray-500">Guidelines with reviewer decisions</p>
+              <p className="mt-1 text-xl font-semibold text-gray-900">
+                {analytics.rules.filter((rule) => rule.decided > 0).length} / {analytics.rules.length}
+              </p>
+            </div>
+            <div className="rounded-lg border border-gray-200 p-3">
+              <p className="text-xs text-gray-500">Potential guideline gaps</p>
+              <p className="mt-1 text-xl font-semibold text-gray-900">{analytics.gaps.length}</p>
+            </div>
+          </div>
+
+          {analytics.rules.length > 0 && (
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold text-gray-900">Reviewer decision coverage</h3>
+              <div className="overflow-x-auto rounded-lg border border-gray-200">
+                <table className="min-w-full divide-y divide-gray-200 text-sm">
+                  <thead className="bg-gray-50 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                    <tr>
+                      <th scope="col" className="px-3 py-2">Guideline</th>
+                      <th scope="col" className="px-3 py-2">Decisions</th>
+                      <th scope="col" className="px-3 py-2">Dismissal rate</th>
+                      <th scope="col" className="px-3 py-2">Assessment</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 bg-white">
+                    {analytics.rules.map((rule) => (
+                      <tr key={rule.rule_key}>
+                        <td className="px-3 py-2">
+                          <span className="font-mono text-xs text-gray-500">{rule.rule_key}</span>
+                          <span className="ml-2 text-gray-800">{rule.title}</span>
+                        </td>
+                        <td className="px-3 py-2 tabular-nums text-gray-700">{rule.decided}</td>
+                        <td className="px-3 py-2 tabular-nums text-gray-700">{Math.round(rule.dismissal_rate * 100)}%</td>
+                        <td className="px-3 py-2 text-xs text-gray-600">
+                          {rule.is_gap ? 'Potential gap' : rule.decided < 5 ? 'Insufficient evidence' : 'No gap threshold met'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-gray-500">
+                Low decision counts are shown as insufficient evidence, not as proof that a guideline is missing.
+              </p>
+            </div>
+          )}
+        </>
+      )}
+
       {analytics && analytics.kit && analytics.gaps.length === 0 && (
         <div className="rounded-lg bg-gray-50 p-5 text-sm text-gray-600">
           No guideline gaps meet the current evidence threshold (at least 5 decisions, 50% dismissal rate, and a repeated reason cluster).

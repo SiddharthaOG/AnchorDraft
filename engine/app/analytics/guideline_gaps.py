@@ -57,7 +57,12 @@ def cluster_dismissal_reasons(
             clusters[best_index]["reasons"].append(reason)
 
     output = []
+    unclustered_reasons = []
     for cluster in clusters:
+        if len(cluster["reasons"]) < MIN_CLUSTER_SIZE:
+            unclustered_reasons.extend(cluster["reasons"])
+            continue
+
         terms: dict[str, int] = defaultdict(int)
         for token_set in cluster["token_sets"]:
             for token in token_set:
@@ -70,8 +75,18 @@ def cluster_dismissal_reasons(
             "theme": " / ".join(theme_terms) if theme_terms else "Similar feedback",
             "count": len(cluster["reasons"]),
             "examples": cluster["reasons"][:MAX_REASON_EXAMPLES],
-            "qualifies": len(cluster["reasons"]) >= MIN_CLUSTER_SIZE,
+            "qualifies": True,
         })
+
+    if unclustered_reasons:
+        unclustered_reasons.sort(key=lambda item: (item.casefold(), item))
+        output.append({
+            "theme": "Other",
+            "count": len(unclustered_reasons),
+            "examples": unclustered_reasons[:MAX_REASON_EXAMPLES],
+            "qualifies": False,
+        })
+
     return sorted(output, key=lambda item: (-item["count"], item["theme"].casefold()))
 
 

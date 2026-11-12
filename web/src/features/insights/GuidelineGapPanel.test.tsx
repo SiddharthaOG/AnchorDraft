@@ -1,5 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+afterEach(cleanup);
 
 const mocks = vi.hoisted(() => ({
   getGuidelineGapAnalytics: vi.fn(),
@@ -26,7 +28,20 @@ import { GuidelineGapPanel } from './GuidelineGapPanel';
 
 const analytics = {
   kit: { id: 'kit-1', version: 4, name: 'Example Kit' },
-  rules: [],
+  rules: [{
+    rule_key: 'CLAIM-01',
+    category: 'claim',
+    title: 'Substantiate claims',
+    guideline_text: 'Avoid unsupported claims.',
+    decided: 5,
+    dismissed: 4,
+    acted_on: 1,
+    dismissal_rate: 0.8,
+    source_versions: [2, 3, 4],
+    is_gap: true,
+    reason_clusters: [],
+    suggestion: null,
+  }],
   gaps: [{
     rule_key: 'CLAIM-01',
     category: 'claim',
@@ -142,6 +157,69 @@ describe('GuidelineGapPanel', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Accept and create new kit version' }));
     await waitFor(() => expect(mocks.acceptGuidelineSuggestion).toHaveBeenCalledWith('suggestion-1'));
     expect(await screen.findByText('Accepted. Brand kit version 5 is now active.')).toBeInTheDocument();
+  });
+
+  it('shows reviewer decision coverage and distinguishes insufficient evidence', async () => {
+    mocks.getGuidelineGapAnalytics.mockResolvedValue({
+      ...analytics,
+      rules: [
+        ...analytics.rules,
+        {
+          rule_key: 'TONE-01',
+          category: 'tone',
+          title: 'Use a consistent tone',
+          guideline_text: 'Use a consistent tone.',
+          decided: 2,
+          dismissed: 1,
+          acted_on: 1,
+          dismissal_rate: 0.5,
+          source_versions: [4],
+          is_gap: false,
+          reason_clusters: [],
+          suggestion: null,
+        },
+      ],
+    });
+
+    render(<GuidelineGapPanel />);
+
+    expect(await screen.findByText('Reviewer decision coverage')).toBeInTheDocument();
+    expect(screen.getByText(/2\s*\/\s*2/)).toBeInTheDocument();
+    expect(screen.getByText('Insufficient evidence')).toBeInTheDocument();
+    expect(screen.getByText('Potential gap')).toBeInTheDocument();
+  });
+
+  it('rejects a pending suggestion with the optional reviewer reason', async () => {
+    const pendingAnalytics = {
+      ...analytics,
+      gaps: [{
+        ...analytics.gaps[0],
+        suggestion: {
+          id: 'suggestion-1',
+          rule_key: 'CLAIM-01',
+          status: 'pending',
+          suggested_text: 'Substantiate claims with approved evidence.',
+          explanation: 'Clarifies the evidence requirement.',
+          source_kit_version: 4,
+          created_at: '2026-11-12T11:00:00Z',
+          accepted_kit_id: null,
+        },
+      }],
+    };
+    mocks.getGuidelineGapAnalytics.mockResolvedValue(pendingAnalytics);
+
+    render(<GuidelineGapPanel />);
+
+    fireEvent.change(await screen.findByLabelText('Optional rejection reason for CLAIM-01'), {
+      target: { value: 'This changes the intended meaning.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+
+    await waitFor(() => expect(mocks.rejectGuidelineSuggestion).toHaveBeenCalledWith(
+      'suggestion-1',
+      'This changes the intended meaning.',
+    ));
+    expect(await screen.findByText('Suggestion rejected and recorded.')).toBeInTheDocument();
   });
 
   it('does not render for reviewers', () => {

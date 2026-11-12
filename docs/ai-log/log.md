@@ -362,3 +362,19 @@ Changes:
 - Frontend production build: succeeded; existing ineffective dynamic-import warning remains.
 - `git diff --check`: passed.
 - No backend or database changes were required for this issue.
+
+## 2026-11-12 - Guideline-Gap Analytics Completion and Audit Refinements
+
+### Implementation refinements
+
+- Restricted historical evidence to completed reviews only, while retaining latest-decision-per-finding and exact current guideline-text matching.
+- Grouped unrelated/singleton dismissal reasons into an explicit Other group; Other never qualifies a guideline gap by itself.
+- Added a reviewer-decision coverage summary and per-rule evidence table so low sample sizes are not presented as missing guidelines.
+- Added tests for tenant scoping, completed-review filtering, verified actor propagation to service-only accept/reject RPCs, stale acceptance conflicts, Other-group behavior, and human rejection flow.
+
+### Verification
+
+- Focused backend analytics/API suite: **18 passed**.
+- Focused frontend GuidelineGapPanel suite: **5 passed**.
+- Full branch regression is pending after the final changes.
+- No hosted database migration or deployment was performed.

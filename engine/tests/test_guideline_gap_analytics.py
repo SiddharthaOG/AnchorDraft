@@ -85,3 +85,26 @@ def test_validate_suggestion_payload_accepts_bounded_output():
     )
 
     assert result[0].startswith("Use plain language")
+
+
+def test_unclustered_reasons_are_grouped_as_other_without_qualifying_as_a_gap():
+    reasons = [
+        "Budget is unclear",
+        "Seasonality is missing",
+        "This is not our audience",
+        "Need a source link",
+        "The tone is too formal",
+    ]
+
+    clusters = cluster_dismissal_reasons(reasons)
+
+    assert len(clusters) == 1
+    assert clusters[0]["theme"] == "Other"
+    assert clusters[0]["count"] == 5
+    assert clusters[0]["qualifies"] is False
+
+    decisions = [
+        {"action": "dismiss", "reason": reason, "source_version": 1}
+        for reason in reasons
+    ]
+    assert summarize_rule_decisions(decisions)["is_gap"] is False

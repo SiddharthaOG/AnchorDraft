@@ -87,6 +87,7 @@ async def _rule_history(pool: DatabasePool, kit_id: str):
            and source_rule.guideline_text = active_rule.guideline_text
           join public.reviews review_record
             on review_record.kit_id = source_rule.kit_id
+           and review_record.status = 'done'
           join public.findings finding
             on finding.review_id = review_record.id
            and finding.rule_id = source_rule.id

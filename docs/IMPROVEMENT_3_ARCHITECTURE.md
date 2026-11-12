@@ -1,9 +1,9 @@
 # Improvement 3 — Guideline-Gap Analytics
 ## Architecture and Workflow Design
 
-**Status:** Architecture baseline (implementation follows in this branch)
+**Status:** Implemented in this branch; staging verification pending
 **Branch:** `feat/guideline-gap-analytics`
-**Parent:** `feat/confidentiality-aware-processing` (stacked dependency; merge Improvement 2 first)
+**Parent:** `main` (Improvement 2 is already merged; this PR contains Improvement 3 only)
 **Scope:** Recurring dismissal analysis, grouped reasons, clearer-wording proposals, human accept/reject, and acceptance creating a new brand-kit version.
 
 ---
@@ -159,4 +159,14 @@ flowchart TD
 
 ## 9. Known external deployment constraint
 
-This branch is stacked on Improvement 2 because its confidentiality engine is a required dependency. Merge/deploy order is Improvement 2 first, then Improvement 3. The Render integration available to this session can update environment variables but does not expose a read/list operation for existing service variables; production `PREVIEW_ENCRYPTION_KEY` presence therefore cannot be independently verified through that integration. Do not overwrite it blindly, because replacing an existing key can make encrypted previews undecryptable.
+Improvement 2 is already merged into main and its confidentiality engine is a required dependency. This branch is rebased by merge onto current main and contains only Improvement 3 changes. The Render integration available to this session can update environment variables but does not expose a read/list operation for existing service variables; production `PREVIEW_ENCRYPTION_KEY` presence therefore cannot be independently verified through that integration. Do not overwrite it blindly, because replacing an existing key can make encrypted previews undecryptable.
+
+## 10. Implementation status (2026-11-12)
+
+- Backend analytics, version-aware evidence, deterministic reason clustering, preview/confirm, typed proposal persistence, and manager/owner accept/reject routes are implemented.
+- The query includes only completed reviews (reviews.status = 'done'), latest decision per finding, same-rule-key history, and exact guideline-text matches.
+- Unclustered reasons are presented as an explicit Other group and never qualify a gap by themselves.
+- Insights now shows all active rules, reviewer-decision coverage, dismissal rates, and evidence status. Low sample counts are labelled insufficient evidence, not missing guidelines.
+- UI tests cover the exact redacted preview, explicit confirmation, acceptance, rejection, reviewer access denial, and evidence coverage.
+- Backend tests cover organization scoping, actor propagation to service-only RPCs, stale acceptance conflicts, preview redaction, and deterministic clustering.
+- Full regression results and staging migration verification are recorded in the PR description before merge.
