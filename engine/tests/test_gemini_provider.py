@@ -440,6 +440,19 @@ class TestGeminiResponseParsing:
 class TestGeminiErrorMapping:
     """Tests for error mapping in generate_findings."""
 
+    def test_safe_error_metadata_is_bounded_and_redacts_api_key(self):
+        provider = GeminiProvider(api_key="secret-test-key")
+        error = Exception("503 Service Unavailable secret-test-key " + ("x" * 700))
+        error.status_code = 503
+
+        metadata = provider._safe_error_metadata(error)
+
+        assert metadata["error_type"] == "Exception"
+        assert metadata["status_code"] == 503
+        assert "secret-test-key" not in metadata["error_detail"]
+        assert "[REDACTED_API_KEY]" in metadata["error_detail"]
+        assert len(metadata["error_detail"]) <= 500
+
     @pytest.mark.asyncio
     async def test_rate_limit_mapped(self):
         """Test that rate limit errors are mapped to RateLimitedError."""

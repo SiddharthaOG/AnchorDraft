@@ -73,6 +73,22 @@ class GeminiProvider:
         """Return the model identifier."""
         return self._model
 
+    def _safe_error_metadata(self, error: Exception) -> Dict[str, Any]:
+        """Return bounded provider diagnostics without leaking credentials or request content."""
+        detail = str(error).replace(self._api_key, "[REDACTED_API_KEY]")
+        detail = " ".join(detail.split())[:500]
+        metadata: Dict[str, Any] = {
+            "error_type": type(error).__name__,
+            "error_detail": detail,
+        }
+        # SDK exceptions expose useful HTTP diagnostics inconsistently. Include
+        # only simple scalar attributes; never serialize request/response objects.
+        for attribute in ("code", "status_code"):
+            value = getattr(error, attribute, None)
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                metadata[attribute] = value
+        return metadata
+
     def _build_gemini_schema(self, schema: Dict[str, Any]) -> Dict[str, Any]:
         """Transform the shared OUTPUT_SCHEMA into Gemini-compatible schema.
 
@@ -388,7 +404,12 @@ class GeminiProvider:
                 )
                 logger.warning(
                     "gemini_timeout",
-                    extra={"model": self._model, "attempt": attempt + 1},
+                    extra={
+                        "model": self._model,
+                        "attempt": attempt + 1,
+                        "timeout_seconds": request.timeout_seconds,
+                        "error_type": "asyncio.TimeoutError",
+                    },
                 )
 
             except Exception as e:
@@ -410,14 +431,21 @@ class GeminiProvider:
                     )
                     logger.warning(
                         "gemini_rate_limited",
-                        extra={"model": self._model, "retry_after": retry_after},
+                        extra={
+                            "model": self._model,
+                            "retry_after": retry_after,
+                            **self._safe_error_metadata(e),
+                        },
                     )
 
                 elif "timeout" in error_lower:
                     last_exception = TimeoutError(f"Gemini request timeout: {error_msg}")
                     logger.warning(
                         "gemini_timeout_error",
-                        extra={"model": self._model},
+                        extra={
+                            "model": self._model,
+                            **self._safe_error_metadata(e),
+                        },
                     )
 
                 elif any(
@@ -427,7 +455,10 @@ class GeminiProvider:
                     last_exception = UnavailableError(f"Gemini service unavailable: {error_msg}")
                     logger.warning(
                         "gemini_unavailable",
-                        extra={"model": self._model, "error": error_msg},
+                        extra={
+                            "model": self._model,
+                            **self._safe_error_metadata(e),
+                        },
                     )
 
                 elif "permission" in error_lower and "safety" in error_lower:
@@ -460,7 +491,10 @@ class GeminiProvider:
                     last_exception = BadOutputError(f"Gemini error: {error_msg}")
                     logger.warning(
                         "gemini_unknown_error",
-                        extra={"model": self._model, "error": error_msg},
+                        extra={
+                            "model": self._model,
+                            **self._safe_error_metadata(e),
+                        },
                     )
 
             # Wait before retry
