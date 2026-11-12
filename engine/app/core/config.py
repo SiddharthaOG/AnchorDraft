@@ -85,6 +85,8 @@ class Settings(BaseSettings):
     # Gemini settings
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.8-flash"
+    # Distinct same-provider fallback for transient Gemini 3.8 capacity failures.
+    GEMINI_FALLBACK_MODEL: str = "gemini-3.6-flash"
     GEMINI_TPM_LIMIT: int = 250000
     GEMINI_RPM_LIMIT: int = 15
 

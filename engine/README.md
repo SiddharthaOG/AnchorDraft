@@ -27,6 +27,8 @@ Environment variables (see `.env.example`):
 | `LLM_PROVIDER` | LLM provider (`fake`, `gemini`, `groq`) | `fake` |
 | `LLM_MODEL` | Model name | — |
 | `GEMINI_API_KEY` | Google Gemini API key | — |
+| `GEMINI_MODEL` | Primary Gemini model | `gemini-3.8-flash` |
+| `GEMINI_FALLBACK_MODEL` | Distinct same-key fallback model for transient Gemini failures | `gemini-3.6-flash` |
 | `GROQ_API_KEY` | Groq API key | — |
 | `DAILY_REVIEW_CAP` | Max reviews per org per day | `20` |
 

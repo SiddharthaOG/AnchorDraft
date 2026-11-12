@@ -51,6 +51,7 @@ class ProviderSettings:
     # Gemini settings
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-3.8-flash"
+    gemini_fallback_model: str = "gemini-3.6-flash"
     gemini_tpm_limit: int = 250000
     gemini_rpm_limit: int = 15
     # Fallback settings
@@ -151,6 +152,7 @@ def load_provider_settings() -> ProviderSettings:
         groq_rpm_limit=getattr(settings, "GROQ_RPM_LIMIT", 30),
         gemini_api_key=getattr(settings, "GEMINI_API_KEY", None),
         gemini_model=getattr(settings, "GEMINI_MODEL", "gemini-3.8-flash"),
+        gemini_fallback_model=getattr(settings, "GEMINI_FALLBACK_MODEL", "gemini-3.6-flash"),
         gemini_tpm_limit=getattr(settings, "GEMINI_TPM_LIMIT", 250000),
         gemini_rpm_limit=getattr(settings, "GEMINI_RPM_LIMIT", 15),
         fallback_enabled=getattr(settings, "LLM_FALLBACK_ENABLED", True),
@@ -230,8 +232,14 @@ def create_fallback_provider(settings: Optional[ProviderSettings] = None) -> Opt
     if not settings.fallback_enabled:
         return None
 
-    # Don't create fallback if it's the same as primary
-    if settings.fallback_provider == settings.provider_type:
+    # A same-provider fallback is useful only when it targets a distinct model.
+    # Gemini supports this path so transient capacity failures on the primary model
+    # can fail over without requiring a second vendor credential.
+    same_provider = settings.fallback_provider == settings.provider_type
+    if same_provider and (
+        settings.fallback_provider != ProviderType.GEMINI
+        or settings.gemini_fallback_model == settings.gemini_model
+    ):
         return None
 
     # Defensive check: fake fallback should not be created in non-local environments
@@ -262,7 +270,11 @@ def create_fallback_provider(settings: Optional[ProviderSettings] = None) -> Opt
                 return None
             return GeminiProvider(
                 api_key=settings.gemini_api_key,
-                model=settings.gemini_model,
+                model=(
+                    settings.gemini_fallback_model
+                    if settings.fallback_provider == ProviderType.GEMINI
+                    else settings.gemini_model
+                ),
                 tpm_limit=settings.gemini_tpm_limit,
                 rpm_limit=settings.gemini_rpm_limit,
             )
@@ -468,17 +480,28 @@ class ProviderWithFallback:
         # Try primary provider
         try:
             remaining = self._check_deadline(overall_deadline, "primary attempt")
+            # A provider that hangs must not consume the entire operation deadline:
+            # reserve 35% (at least MIN_FALLBACK_TIME_SECONDS + scheduling margin)
+            # for the configured fallback. Without a fallback, preserve the full
+            # timeout for primary.
+            primary_budget = remaining
+            if self._fallback:
+                fallback_reserve = min(
+                    remaining * 0.8,
+                    max(self.MIN_FALLBACK_TIME_SECONDS + 0.1, remaining * 0.35),
+                )
+                primary_budget = max(0.1, remaining - fallback_reserve)
             primary_request = ProviderRequest(
                 system_instruction=request.system_instruction,
                 user_content=request.user_content,
                 output_schema=request.output_schema,
                 randomness=request.randomness,
                 output_limit=request.output_limit,
-                timeout_seconds=max(1, min(request.timeout_seconds, int(remaining))),
+                timeout_seconds=max(1, min(request.timeout_seconds, int(primary_budget))),
             )
             result = await asyncio.wait_for(
                 self._invoke_provider(self._primary, primary_request, images),
-                timeout=remaining,
+                timeout=primary_budget,
             )
             logger.info(
                 "provider_primary_success",
@@ -487,10 +510,10 @@ class ProviderWithFallback:
             return result
 
         except asyncio.TimeoutError:
-            primary_error = TimeoutError(f"Primary provider timed out after {remaining:.1f}s")
+            primary_error = TimeoutError(f"Primary provider timed out after {primary_budget:.1f}s")
             logger.warning(
                 "provider_primary_timeout",
-                extra={"model": self.primary_model, "remaining_seconds": remaining},
+                extra={"model": self.primary_model, "primary_budget_seconds": primary_budget},
             )
 
             # Check if we should attempt fallback
@@ -698,7 +721,13 @@ def create_fallback_vision_provider(settings: Optional[ProviderSettings] = None)
     """Create the configured vision fallback, if enabled and distinct."""
     if settings is None:
         settings = load_provider_settings()
-    if not settings.fallback_enabled or settings.fallback_provider == settings.provider_type:
+    same_provider = settings.fallback_provider == settings.provider_type
+    if not settings.fallback_enabled or (
+        same_provider and (
+            settings.fallback_provider != ProviderType.GEMINI
+            or settings.gemini_fallback_model == settings.gemini_model
+        )
+    ):
         return None
 
     from app.visual.vision_providers import (
@@ -725,7 +754,11 @@ def create_fallback_vision_provider(settings: Optional[ProviderSettings] = None)
                 return None
             return GeminiVisionProvider(
                 api_key=settings.gemini_api_key,
-                model=settings.gemini_model,
+                model=(
+                    settings.gemini_fallback_model
+                    if settings.fallback_provider == ProviderType.GEMINI
+                    else settings.gemini_model
+                ),
                 tpm_limit=settings.gemini_tpm_limit,
                 rpm_limit=settings.gemini_rpm_limit,
             )
