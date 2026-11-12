@@ -7,6 +7,7 @@ from app.api.health import router as health_router
 from app.api.reviews import router as reviews_router
 from app.api.imports import router as imports_router
 from app.api.kits import router as kits_router
+from app.api.confidentiality import router as confidentiality_router
 from app.api.middleware import RequestIdMiddleware
 from app.core.config import get_settings
 from app.core.errors import (
@@ -63,6 +64,7 @@ def create_app() -> FastAPI:
     app.include_router(reviews_router, prefix="/v1")
     app.include_router(imports_router, prefix="/v1")
     app.include_router(kits_router, prefix="/v1")
+    app.include_router(confidentiality_router, prefix="/v1")
 
     return app
 
