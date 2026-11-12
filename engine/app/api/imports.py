@@ -249,7 +249,7 @@ async def import_visual(
             "signed_url": signed_url,
             "expires_in": 3600,
         }
-    except Exception:
+    except Exception as exc:
         if upload_result is not None and upload_result.created:
             try:
                 await asyncio.to_thread(
@@ -259,10 +259,17 @@ async def import_visual(
                     storage_path=upload_result.storage_path,
                     user_id=UUID(str(user.user_id)),
                 )
-            except Exception:
-                logger.exception(
+            except Exception as cleanup_error:
+                logger.error(
                     "visual_upload_cleanup_failed",
-                    extra={"asset_id": str(upload_result.asset_id), "content_id": str(content_id)},
+                    extra={
+                        "asset_id": str(upload_result.asset_id),
+                        "content_id": str(content_id),
+                        "error_type": type(cleanup_error).__name__,
+                    },
                 )
-        logger.exception("visual_upload_failed", extra={"content_id": str(content_id)})
+        logger.error(
+            "visual_upload_failed",
+            extra={"content_id": str(content_id), "error_type": type(exc).__name__},
+        )
         raise

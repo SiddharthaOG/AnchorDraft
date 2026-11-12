@@ -1,6 +1,8 @@
 """FastAPI application entry point."""
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
@@ -13,7 +15,8 @@ from app.core.errors import (
     AppException,
     app_exception_handler,
     generic_exception_handler,
-    map_db_exception,
+    http_exception_handler,
+    request_validation_exception_handler,
 )
 from app.store.db import get_db_pool, close_db_pool
 
@@ -56,6 +59,8 @@ def create_app() -> FastAPI:
 
     # Exception handlers
     app.add_exception_handler(AppException, app_exception_handler)
+    app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+    app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
     app.add_exception_handler(Exception, generic_exception_handler)
 
     # Include routers

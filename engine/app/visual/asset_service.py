@@ -284,7 +284,10 @@ class VisualAssetService:
                 try:
                     bucket.remove([storage_path])
                 except Exception as cleanup_error:
-                    logger.exception("visual_asset_race_object_cleanup_failed", extra={"path": storage_path})
+                    logger.error(
+                        "visual_asset_race_object_cleanup_failed",
+                        extra={"path": storage_path, "error_type": type(cleanup_error).__name__},
+                    )
                     raise RuntimeError(f"Failed to remove duplicate-race storage object {storage_path}") from cleanup_error
                 return self._upload_result(asset_record, metadata, created=False)
             return self._upload_result(asset_record, metadata, created=True)
@@ -296,8 +299,11 @@ class VisualAssetService:
                     removed = self.cleanup_new_asset(org_id, asset_id, storage_path, user_id) if record_creation_attempted else False
                     if not removed:
                         bucket.remove([storage_path])
-                except Exception:
-                    logger.exception("visual_asset_upload_cleanup_failed", extra={"path": storage_path})
+                except Exception as cleanup_error:
+                    logger.error(
+                        "visual_asset_upload_cleanup_failed",
+                        extra={"path": storage_path, "error_type": type(cleanup_error).__name__},
+                    )
             raise
 
     @staticmethod
