@@ -362,3 +362,47 @@ Changes:
 - Frontend production build: succeeded; existing ineffective dynamic-import warning remains.
 - `git diff --check`: passed.
 - No backend or database changes were required for this issue.
+
+
+## 2026-11-12 — Frontend redesign and whole-project integration hardening
+
+### Scope
+Worked only on `feat/frontend-redesign`, based on `main` commit `705c613`. No deployment, migration execution, production configuration change, merge, or change to the active staging revision test.
+
+### Frontend
+- Added the responsive editorial workspace shell, role-aware navigation, organization switcher, account footer, mobile drawer and secure-workspace header.
+- Added a warm neutral / forest palette through Tailwind CSS 4 theme tokens; restored the original primary color tokens after the initial redesign stylesheet had omitted them.
+- Kept system font stacks; no external font CDN or new package was introduced.
+- Added route-level lazy loading with an in-shell loading fallback, page-entry motion, hover/press transitions and reduced-motion support.
+- Added an application render error boundary with an honest recovery message.
+- Removed nested dashboard links that triggered React hydration warnings.
+- Removed import-time Supabase client creation from the data and auth modules. Authentication errors are caught and surfaced instead of escaping from the React effect.
+- Review, image-upload and kit-lint requests now retain request correlation IDs in structured errors.
+
+### Backend and integration
+- Normalized FastAPI HTTP and request-validation errors into the documented `ErrorResponse` shape. Validation responses do not echo rejected input values.
+- Validated inbound `X-Request-Id` values and ensured generic server/database errors return the request ID in both body and header.
+- Removed exception-trace logging from review/upload failure paths; logs retain IDs, duration and error type, not exception content.
+- Fixed `run_visual_analysis()` to forward the preview-approved provider request override and expected asset checksums to `VisualAnalyzer.analyze_assets()`.
+- Added regression tests for preview context propagation, API error normalization, request-ID validation, exception-log redaction, lazy Supabase initialization, auth failure handling and the app error boundary.
+
+### Verification
+- `web: npm run build`: passed (Vite 8.3.5; production chunks emitted).
+- `web: npm test`: **201 passed across 13 test files**.
+- `engine: Python 3.12 -m compileall -q app`: passed.
+- `engine: Python 3.12 -m pytest -q tests`: **733 passed, 4 skipped**.
+- `git diff --check`: passed.
+- One existing third-party warning remains: Starlette's deprecation notice for using `httpx` with `TestClient` in `test_cors_origins.py`. No tests failed.
+
+### Not verified / remaining work
+- The branch has not been deployed, so the redesign has not been visually inspected in a real browser against the live staging API.
+- No live Supabase migration or database mutation was run. SQL migration review was static: 18 created tables had matching RLS enablement statements; security-definer functions had fixed empty search paths in the reviewed migrations.
+- `ARCHITECTURE.md` and `docs/AGENTS.md` still describe the original Round 2 build window and say visual review/redaction are out of scope. Those documents are historical and now conflict with the codebase; they were not rewritten without the architect's separate approval.
+- Existing API and data workflows remain the source of truth; this branch does not introduce new product phases or change review/approval state transitions.
+
+### Explainability
+1. The browser remains a UI and direct-RLS reader; the FastAPI engine remains the trusted review service.
+2. Workflow state changes remain database-function controlled; no service key moved to the browser.
+3. The new visual shell changes presentation and loading behaviour, not review data contracts.
+4. Error envelopes carry a stable request ID so the UI can show a support reference without exposing internal exception details.
+5. The visual analyzer now receives the same approved provider request and asset checksums captured by the preview flow.
