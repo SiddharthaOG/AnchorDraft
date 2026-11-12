@@ -143,12 +143,12 @@ def build_vision_user_content(
 
 
 class GroqVisionProvider:
-    """Groq vision provider using GPT-OSS models (if vision supported) or compatible vision models."""
+    """Groq vision provider using a configured multimodal model."""
 
     def __init__(
         self,
         api_key: str,
-        model: str = "llama-3.2-90b-vision-preview",  # Groq vision model
+        model: str = "qwen/qwen3.8-27b",  # Current Groq vision + structured-output model
         tpm_limit: Optional[int] = None,
         rpm_limit: Optional[int] = None,
     ):
@@ -162,7 +162,7 @@ class GroqVisionProvider:
 
         self._api_key = api_key
         self._model = model
-        self._tpm_limit = tpm_limit or 8000
+        self._tpm_limit = tpm_limit or 250000
         self._rpm_limit = rpm_limit or 30
         self._client = AsyncGroq(api_key=api_key, timeout=60.0)
         self.TOKEN_SAFETY_MARGIN = 0.20
@@ -232,6 +232,10 @@ class GroqVisionProvider:
         last_exception = None
 
         for attempt in range(max_retries + 1):
+            logger.info(
+                "groq_vision_request_started",
+                extra={"model": self._model, "attempt": attempt + 1, "image_count": len(images)},
+            )
             try:
                 from groq import AsyncGroq
                 completion = await asyncio.wait_for(
@@ -242,10 +246,25 @@ class GroqVisionProvider:
                 latency_ms = int((time.perf_counter() - start_time) * 1000)
                 result = self._parse_response(completion, request)
                 result.latency_ms = latency_ms
+                logger.info(
+                    "groq_vision_request_completed",
+                    extra={
+                        "model": self._model,
+                        "latency_ms": latency_ms,
+                        "input_tokens": result.input_tokens,
+                        "output_tokens": result.output_tokens,
+                        "finish_reason": result.finish_reason,
+                        "attempt": attempt + 1,
+                    },
+                )
                 return result
 
             except asyncio.TimeoutError:
                 last_exception = TimeoutError(f"Request timed out after {request.timeout_seconds}s")
+                logger.warning(
+                    "groq_vision_timeout",
+                    extra={"model": self._model, "attempt": attempt + 1},
+                )
             except Exception as e:
                 if isinstance(e, (BlockedError, BadOutputError)):
                     raise
@@ -258,6 +277,11 @@ class GroqVisionProvider:
                     last_exception = UnavailableError(f"Groq unavailable: {e}")
                 else:
                     last_exception = BadOutputError(f"Groq error: {e}")
+
+                logger.warning(
+                    "groq_vision_request_failed",
+                    extra={"model": self._model, "attempt": attempt + 1, "error_type": type(e).__name__},
+                )
 
             if attempt < max_retries and last_exception:
                 await asyncio.sleep(min(2 ** attempt, 10))

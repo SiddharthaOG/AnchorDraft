@@ -38,7 +38,7 @@ class GroqProvider:
     """
 
     # Groq free-tier limits (organization-specific, must be verified in console)
-    DEFAULT_TPM_LIMIT = 8000
+    DEFAULT_TPM_LIMIT = 250_000
     DEFAULT_RPM_LIMIT = 30
     DEFAULT_RPD_LIMIT = 1000
     DEFAULT_TPD_LIMIT = 200_000
@@ -58,7 +58,7 @@ class GroqProvider:
         Args:
             api_key: Groq API key (must not be logged).
             model: Model identifier. Default: openai/gpt-oss-120b.
-            tpm_limit: Tokens per minute limit for budgeting. Default: 8000.
+            tpm_limit: Tokens per minute limit for budgeting. Default: 250000.
             rpm_limit: Requests per minute limit. Default: 30.
         """
         if not api_key or not api_key.strip():
@@ -328,6 +328,10 @@ class GroqProvider:
         last_exception = None
 
         for attempt in range(max_retries + 1):
+            logger.info(
+                "groq_request_started",
+                extra={"model": self._model, "attempt": attempt + 1},
+            )
             try:
                 # Respect timeout
                 completion = await asyncio.wait_for(
@@ -406,7 +410,11 @@ class GroqProvider:
                     last_exception = UnavailableError(f"Groq service unavailable: {error_msg}")
                     logger.warning(
                         "groq_unavailable",
-                        extra={"model": self._model, "error": error_msg},
+                        extra={
+                            "model": self._model,
+                            "error_type": type(e).__name__,
+                            "status_code": getattr(e, "status_code", None),
+                        },
                     )
 
                 elif "authentication" in error_lower or "unauthorized" in error_lower or "401" in error_lower:
@@ -417,7 +425,7 @@ class GroqProvider:
                     last_exception = BadOutputError(f"Groq schema validation failed: {error_msg}")
                     logger.warning(
                         "groq_schema_validation_failed",
-                        extra={"model": self._model, "error": error_msg},
+                        extra={"model": self._model, "error_type": type(e).__name__},
                     )
 
                 else:
@@ -425,7 +433,7 @@ class GroqProvider:
                     last_exception = BadOutputError(f"Groq error: {error_msg}")
                     logger.warning(
                         "groq_unknown_error",
-                        extra={"model": self._model, "error": error_msg},
+                        extra={"model": self._model, "error_type": type(e).__name__},
                     )
 
             # Wait before retry (only for retryable errors)

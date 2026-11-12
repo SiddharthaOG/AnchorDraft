@@ -78,7 +78,7 @@ class TestGroqProviderInit:
         """Test successful initialization with valid API key."""
         provider = GroqProvider(api_key="test-key-123")
         assert provider.model == "openai/gpt-oss-120b"
-        assert provider._tpm_limit == 8000
+        assert provider._tpm_limit == 250000
         assert provider._rpm_limit == 30
 
     def test_init_with_custom_model(self):

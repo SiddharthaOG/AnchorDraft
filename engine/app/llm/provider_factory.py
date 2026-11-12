@@ -46,7 +46,8 @@ class ProviderSettings:
     # Groq settings
     groq_api_key: Optional[str] = None
     groq_model: str = "openai/gpt-oss-120b"
-    groq_tpm_limit: int = 8000
+    groq_vision_model: str = "qwen/qwen3.8-27b"
+    groq_tpm_limit: int = 250000
     groq_rpm_limit: int = 30
     # Gemini settings
     gemini_api_key: Optional[str] = None
@@ -148,7 +149,8 @@ def load_provider_settings() -> ProviderSettings:
         provider_type=provider_type,
         groq_api_key=getattr(settings, "GROQ_API_KEY", None),
         groq_model=getattr(settings, "GROQ_MODEL", "openai/gpt-oss-120b"),
-        groq_tpm_limit=getattr(settings, "GROQ_TPM_LIMIT", 8000),
+        groq_vision_model=getattr(settings, "GROQ_VISION_MODEL", "qwen/qwen3.8-27b"),
+        groq_tpm_limit=getattr(settings, "GROQ_TPM_LIMIT", 250000),
         groq_rpm_limit=getattr(settings, "GROQ_RPM_LIMIT", 30),
         gemini_api_key=getattr(settings, "GEMINI_API_KEY", None),
         gemini_model=getattr(settings, "GEMINI_MODEL", "gemini-3.8-flash"),
@@ -746,6 +748,7 @@ def create_vision_provider(settings: Optional[ProviderSettings] = None):
             raise ProviderConfigError("GROQ_API_KEY is required for Groq vision provider")
         return GroqVisionProvider(
             api_key=settings.groq_api_key,
+            model=settings.groq_vision_model,
             tpm_limit=settings.groq_tpm_limit,
             rpm_limit=settings.groq_rpm_limit,
         )
@@ -789,6 +792,7 @@ def create_fallback_vision_provider(settings: Optional[ProviderSettings] = None)
                 return None
             return GroqVisionProvider(
                 api_key=settings.groq_api_key,
+                model=settings.groq_vision_model,
                 tpm_limit=settings.groq_tpm_limit,
                 rpm_limit=settings.groq_rpm_limit,
             )
