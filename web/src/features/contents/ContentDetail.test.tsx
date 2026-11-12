@@ -839,6 +839,63 @@ describe('ContentDetail', () => {
       expect(screen.queryByRole('button', { name: 'Submit for Review' })).not.toBeInTheDocument();
     });
 
+    it('keeps findings returned by a completed polling request', { timeout: 15000 }, async () => {
+      let resolveTerminalFindings!: (value: any[]) => void;
+      const terminalFindings = new Promise<any[]>(resolve => {
+        resolveTerminalFindings = resolve;
+      });
+      const queuedReview = { ...defaultReview, status: 'queued' as const };
+      const completedReview = { ...defaultReview, status: 'done' as const };
+      const finding = {
+        id: 'finding-from-poll',
+        org_id: 'org-1',
+        review_id: 'review-1',
+        source: 'llm',
+        rule_id: null,
+        fact_id: null,
+        ref_key: 'CLAIM-01',
+        category: 'claim',
+        severity: 'high',
+        quote: 'guaranteed uptime',
+        start_offset: 0,
+        end_offset: 17,
+        explanation: 'Unsupported absolute guarantee',
+        suggestion: 'remove the guarantee',
+        confidence: 0.98,
+        needs_human: false,
+        needs_reviewer: false,
+        created_at: '2026-01-01T00:00:00Z',
+        last_action: null,
+        last_reason: null,
+        last_edited_text: null,
+        resulting_revision_id: null,
+        decided_at: null,
+      };
+
+      mockGetLatestReviewForRevision
+        .mockResolvedValueOnce(queuedReview)
+        .mockResolvedValueOnce(completedReview);
+      mockGetFindingsWithDecisionsForReview
+        .mockResolvedValueOnce([])
+        .mockReturnValueOnce(terminalFindings);
+
+      await renderAndWaitForLoad(<ContentDetail />);
+
+      await waitFor(() => {
+        expect(mockGetFindingsWithDecisionsForReview).toHaveBeenCalledTimes(2);
+      });
+
+      // Let the terminal findings fetch complete only after the UI has seen
+      // the completed status. The poll must remain valid until it stores them.
+      await act(async () => {
+        resolveTerminalFindings([finding]);
+        await terminalFindings;
+      });
+
+      expect(await screen.findByText(/Findings \(1\)/)).toBeInTheDocument();
+      expect(screen.getByText('Unsupported absolute guarantee')).toBeInTheDocument();
+      expect(screen.queryByText('No findings were generated. You can submit this content for approval.')).not.toBeInTheDocument();
+    });
     it('cannot submit when review failed or unfinished', async () => {
       mockGetLatestReviewForRevision.mockResolvedValue({
         ...defaultReview,
