@@ -162,7 +162,7 @@ class GroqVisionProvider:
 
         self._api_key = api_key
         self._model = model
-        self._tpm_limit = tpm_limit or 250000
+        self._tpm_limit = tpm_limit or 8000
         self._rpm_limit = rpm_limit or 30
         self._client = AsyncGroq(api_key=api_key, timeout=60.0)
         self.TOKEN_SAFETY_MARGIN = 0.20

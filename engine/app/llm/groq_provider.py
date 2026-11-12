@@ -38,7 +38,7 @@ class GroqProvider:
     """
 
     # Groq free-tier limits (organization-specific, must be verified in console)
-    DEFAULT_TPM_LIMIT = 250_000
+    DEFAULT_TPM_LIMIT = 8_000
     DEFAULT_RPM_LIMIT = 30
     DEFAULT_RPD_LIMIT = 1000
     DEFAULT_TPD_LIMIT = 200_000
@@ -58,7 +58,7 @@ class GroqProvider:
         Args:
             api_key: Groq API key (must not be logged).
             model: Model identifier. Default: openai/gpt-oss-120b.
-            tpm_limit: Tokens per minute limit for budgeting. Default: 250000.
+            tpm_limit: Tokens per minute limit for budgeting. Default: 8000.
             rpm_limit: Requests per minute limit. Default: 30.
         """
         if not api_key or not api_key.strip():

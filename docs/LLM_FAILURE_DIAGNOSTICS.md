@@ -42,9 +42,9 @@ For Gemini-primary / Groq-fallback staging:
 - `LLM_FALLBACK_PROVIDER=groq`
 - `GROQ_MODEL=openai/gpt-oss-120b` for text findings
 - `GROQ_VISION_MODEL=qwen/qwen3.8-27b` for visual findings
-- `GROQ_TPM_LIMIT=250000` unless the account's actual Groq console limit is lower
+- `GROQ_TPM_LIMIT=8000` as a conservative free-tier default; raise it only after checking the organization's exact limit in Groq Console
 
-Text and vision use separate Groq model settings. Do not point visual requests at the text-only GPT-OSS model. The selected Qwen model supports multimodal input and structured outputs on Groq.
+Text and vision use separate Groq model settings. Do not point visual requests at the text-only GPT-OSS model. The selected Qwen model supports multimodal input and strict structured outputs on Groq. The 8K TPM default is deliberately conservative: Groq publishes different limits by plan and model, so never assume the Developer-plan limit applies to a Free organization.
 
 ## 4. Timeout policy
 

@@ -74,7 +74,7 @@ class TestProviderSettings:
         assert settings.provider_type == ProviderType.FAKE
         assert settings.groq_model == "openai/gpt-oss-120b"
         assert settings.groq_vision_model == "qwen/qwen3.8-27b"
-        assert settings.groq_tpm_limit == 250000
+        assert settings.groq_tpm_limit == 8000
         assert settings.gemini_model == "gemini-3.8-flash"
         assert settings.gemini_fallback_model == "gemini-3.6-flash"
         assert settings.fallback_enabled is True
@@ -602,7 +602,7 @@ class TestLoadSettings:
             mock_settings.GROQ_API_KEY = ""
             mock_settings.GROQ_MODEL = "openai/gpt-oss-120b"
             mock_settings.GROQ_VISION_MODEL = "qwen/qwen3.8-27b"
-            mock_settings.GROQ_TPM_LIMIT = 250000
+            mock_settings.GROQ_TPM_LIMIT = 8000
             mock_settings.GROQ_RPM_LIMIT = 30
             mock_settings.GEMINI_API_KEY = ""
             mock_settings.GEMINI_MODEL = "gemini-3.8-flash"
@@ -616,7 +616,7 @@ class TestLoadSettings:
             assert settings.provider_type == ProviderType.FAKE
             assert settings.fallback_provider == ProviderType.GEMINI
             assert settings.groq_vision_model == "qwen/qwen3.8-27b"
-            assert settings.groq_tpm_limit == 250000
+            assert settings.groq_tpm_limit == 8000
 
 
 class TestLoadSettingsEnvironmentBehavior:
@@ -635,7 +635,7 @@ class TestLoadSettingsEnvironmentBehavior:
             "GROQ_API_KEY": "",
             "GROQ_MODEL": "openai/gpt-oss-120b",
             "GROQ_VISION_MODEL": "qwen/qwen3.8-27b",
-            "GROQ_TPM_LIMIT": 250000,
+            "GROQ_TPM_LIMIT": 8000,
             "GROQ_RPM_LIMIT": 30,
             "GEMINI_API_KEY": "",
             "GEMINI_MODEL": "gemini-3.8-flash",
