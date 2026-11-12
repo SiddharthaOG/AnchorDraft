@@ -451,6 +451,8 @@ export function ContentDetail() {
   const [latestReview, setLatestReview] = useState<Review | null>(null);
   const [findings, setFindings] = useState<FindingDisplay[]>([]);
   const [pendingSignoffs, setPendingSignoffs] = useState<number>(0);
+  // Findings/signoffs must be loaded for this exact revision before submission is eligible.
+  const [reviewDataLoadedForRevisionId, setReviewDataLoadedForRevisionId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -613,6 +615,7 @@ export function ContentDetail() {
     const requestId = ++reviewRequestIdRef.current;
 
     try {
+      setReviewDataLoadedForRevisionId(null);
       const review = await getLatestReviewForRevision(revisionId);
 
       // Do not apply results if another request or revision superseded this one.
@@ -628,6 +631,7 @@ export function ContentDetail() {
       if (!review) {
         setFindings([]);
         setPendingSignoffs(0);
+        setReviewDataLoadedForRevisionId(revisionId);
         return;
       }
 
@@ -646,6 +650,7 @@ export function ContentDetail() {
 
       setFindings(findingsData as FindingDisplay[]);
       setPendingSignoffs(signoffs.length);
+      setReviewDataLoadedForRevisionId(revisionId);
     } catch (err) {
       if (
         requestId !== reviewRequestIdRef.current ||
@@ -657,6 +662,7 @@ export function ContentDetail() {
       console.error('Failed to load review data:', err);
       setFindings([]);
       setPendingSignoffs(0);
+      setReviewDataLoadedForRevisionId(null);
       setToastError(
         err instanceof Error ? err.message : 'Failed to load review data'
       );
@@ -1153,7 +1159,8 @@ const startPolling = useCallback(() => {
   const allFindingsDecided = findings.every(f => f.last_action);
   const canSubmit = canEditSelectedRevision && hasLatestReview && latestReview?.status === 'done' &&
     (latestReview.llm_status === 'ok' || latestReview.llm_status === 'skipped') &&
-    allFindingsDecided && !hasPendingDecisions;
+    allFindingsDecided && !hasPendingDecisions &&
+    reviewDataLoadedForRevisionId === latestRevision?.id;
 
   return (
     <div className="space-y-8">
