@@ -1,6 +1,5 @@
 """Endpoint-level tests for organization confidentiality policy management."""
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError

@@ -71,14 +71,14 @@ export function ConfidentialitySettings() {
       <div className="mt-6">
         <label htmlFor="confidentiality-terms" className="block text-sm font-semibold text-gray-900">Organisation-specific terms</label>
         <p className="mt-1 text-sm text-gray-500">One term per line. Matching is case-insensitive. Add project codenames, internal identifiers, confidential phrases, or other values that generic detectors cannot know.</p>
-        <textarea id="confidentiality-terms" value={termsText} onChange={e => setTermsText(e.target.value)} rows={7} maxLength={20000} disabled={!policy.enabled} placeholder={'ORCHID-VAULT-ALPHA\nNEVER-SEND-ORIGINAL-TEXT-7F92'} className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-gray-50" />
+        <textarea id="confidentiality-terms" value={termsText} onChange={e => setTermsText(e.target.value)} rows={7} maxLength={20500} disabled={!policy.enabled} placeholder={'ORCHID-VAULT-ALPHA\nNEVER-SEND-ORIGINAL-TEXT-7F92'} className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-gray-50" />
         <p className="mt-1 text-xs text-gray-500">{termsText.split(/\r?\n/).filter(term => term.trim()).length} terms · up to 500 terms, 256 characters each</p>
       </div>
       {error && <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
       {notice && <p role="status" className="mt-4 rounded-lg bg-green-50 p-3 text-sm text-green-800">{notice}</p>}
       <div className="mt-5 flex items-center justify-between gap-3">
         <p className="text-xs text-gray-500">Saving increments the policy version and invalidates previews made under the previous policy.</p>
-        <button onClick={() => void save()} disabled={saving || !policy.enabled && false} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-50">{saving ? 'Saving…' : 'Save policy'}</button>
+        <button onClick={() => void save()} disabled={saving} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-50">{saving ? 'Saving…' : 'Save policy'}</button>
       </div>
     </section>
   );
