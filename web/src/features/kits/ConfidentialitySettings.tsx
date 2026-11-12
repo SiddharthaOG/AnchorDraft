@@ -35,7 +35,15 @@ export function ConfidentialitySettings() {
     const custom_terms = termsText.split(/\r?\n/).map(term => term.trim()).filter(Boolean);
     setSaving(true); setError(null); setNotice(null);
     try {
-      const updated = await updateConfidentialityPolicy({ ...policy, custom_terms });
+      const updated = await updateConfidentialityPolicy({
+        enabled: policy.enabled,
+        custom_terms,
+        redact_emails: policy.redact_emails,
+        redact_phones: policy.redact_phones,
+        redact_api_keys: policy.redact_api_keys,
+        redact_jwts: policy.redact_jwts,
+        redact_credit_cards: policy.redact_credit_cards,
+      });
       setPolicy(updated);
       setTermsText(updated.custom_terms.join('\n'));
       setNotice(`Saved as policy version ${updated.version}. New previews will use these settings; existing previews must be recreated.`);

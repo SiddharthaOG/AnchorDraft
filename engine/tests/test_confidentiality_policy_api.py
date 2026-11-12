@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.api.confidentiality import ConfidentialityPolicyUpdate, _safe_policy
-from app.auth.dependencies import AuthUser, get_current_user_single_org
+from app.auth.dependencies import AuthUser, get_current_user, get_current_user_single_org
 from httpx import ASGITransport, AsyncClient
 
 
@@ -115,15 +115,45 @@ async def test_owner_can_read_default_policy_and_update_it(fake_supabase):
 
 
 @pytest.mark.asyncio
-async def test_non_owner_cannot_read_or_update_policy(fake_supabase):
+@pytest.mark.parametrize("role", ["manager", "creator", "reviewer"])
+async def test_non_owner_cannot_read_or_update_policy(fake_supabase, role):
     app = create_test_app()
-    app.dependency_overrides[get_current_user_single_org] = lambda: AuthUser(USER_ID, ORG_ID, ["manager"])
+    app.dependency_overrides[get_current_user_single_org] = lambda: AuthUser(USER_ID, ORG_ID, [role])
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             read = await client.get("/v1/organizations/me/confidentiality-policy")
             write = await client.put("/v1/organizations/me/confidentiality-policy", json={"custom_terms": ["private"]})
             assert read.status_code == 403
             assert write.status_code == 403
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_unauthenticated_user_cannot_read_or_update_policy(fake_supabase):
+    app = create_test_app()
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            read = await client.get("/v1/organizations/me/confidentiality-policy")
+            write = await client.put(
+                "/v1/organizations/me/confidentiality-policy",
+                json={"custom_terms": ["private"]},
+            )
+            assert read.status_code == 401
+            assert write.status_code == 401
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_multiple_organization_memberships_are_rejected(fake_supabase):
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: AuthUser(USER_ID, "", [])
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/v1/organizations/me/confidentiality-policy")
+            assert response.status_code == 400
+            assert response.json()["detail"]["error"]["reason"] == "multiple_memberships"
     finally:
         app.dependency_overrides.clear()
 

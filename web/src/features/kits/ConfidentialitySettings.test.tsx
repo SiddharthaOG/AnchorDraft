@@ -31,9 +31,17 @@ describe('ConfidentialitySettings', () => {
     const terms = screen.getByLabelText('Organisation-specific terms');
     fireEvent.change(terms, { target: { value: 'ORCHID-VAULT-ALPHA\nNEVER-SEND-ORIGINAL-TEXT-7F92' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save policy' }));
-    await waitFor(() => expect(updatePolicy).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(updatePolicy).toHaveBeenCalledWith({
+      enabled: true,
       custom_terms: ['ORCHID-VAULT-ALPHA', 'NEVER-SEND-ORIGINAL-TEXT-7F92'],
-    })));
+      redact_emails: true,
+      redact_phones: true,
+      redact_api_keys: true,
+      redact_jwts: true,
+      redact_credit_cards: true,
+    }));
+    expect(updatePolicy.mock.calls[0][0]).not.toHaveProperty('org_id');
+    expect(updatePolicy.mock.calls[0][0]).not.toHaveProperty('version');
     expect(await screen.findByText(/Saved as policy version 2/)).toBeInTheDocument();
   });
 

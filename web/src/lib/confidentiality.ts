@@ -13,7 +13,9 @@ export interface ConfidentialityPolicy {
   redact_credit_cards: boolean;
 }
 
-async function request<T>(method: 'GET' | 'PUT', payload?: Partial<ConfidentialityPolicy>): Promise<T> {
+export type ConfidentialityPolicyUpdate = Omit<ConfidentialityPolicy, 'org_id' | 'version'>;
+
+async function request<T>(method: 'GET' | 'PUT', payload?: ConfidentialityPolicyUpdate): Promise<T> {
   const { data, error } = await getSupabaseClient().auth.getSession();
   const token = data.session?.access_token;
   if (error || !token) throw new Error('Your session has expired. Sign in again.');
@@ -35,6 +37,6 @@ export function getConfidentialityPolicy(): Promise<ConfidentialityPolicy> {
   return request<ConfidentialityPolicy>('GET');
 }
 
-export function updateConfidentialityPolicy(policy: Partial<ConfidentialityPolicy>): Promise<ConfidentialityPolicy> {
+export function updateConfidentialityPolicy(policy: ConfidentialityPolicyUpdate): Promise<ConfidentialityPolicy> {
   return request<ConfidentialityPolicy>('PUT', policy);
 }
