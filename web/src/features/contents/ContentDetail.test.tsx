@@ -1060,11 +1060,11 @@ describe('ContentDetail', () => {
         needs_human: false,
         needs_reviewer: false,
         created_at: '2026-01-01T00:00:00Z',
-        last_action: null,
-        last_reason: null,
+        last_action: 'dismiss',
+        last_reason: 'Confirmed and dismissed for this test',
         last_edited_text: null,
         resulting_revision_id: null,
-        decided_at: null,
+        decided_at: '2026-01-01T00:01:00Z',
       };
 
       mockGetLatestReviewForRevision
@@ -1090,6 +1090,11 @@ describe('ContentDetail', () => {
       expect(await screen.findByText(/Findings \(1\)/)).toBeInTheDocument();
       expect(screen.getByText('Unsupported absolute guarantee')).toBeInTheDocument();
       expect(screen.queryByText('No findings were generated. You can submit this content for approval.')).not.toBeInTheDocument();
+      // The terminal poll must also mark the findings snapshot ready, so a
+      // fully decided review can become submittable after polling completes.
+      await waitFor(() => {
+        expect(screen.getAllByRole('button', { name: 'Submit for Review' })).toHaveLength(2);
+      });
     });
     it('cannot submit when review failed or unfinished', async () => {
       mockGetLatestReviewForRevision.mockResolvedValue({

@@ -739,6 +739,9 @@ const startPolling = useCallback(() => {
         // in-flight request and discards the findings response.
         setFindings(findingsData as FindingDisplay[]);
         setPendingSignoffs(signoffs.length);
+        // The terminal polling path must release the same submission gate as
+        // the initial review-data loader, but only after both requests finish.
+        setReviewDataLoadedForRevisionId(revisionId);
         setLatestReview(review);
         stopPolling();
       } else {
