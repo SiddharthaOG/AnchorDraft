@@ -172,6 +172,20 @@ function LoginPage() {
   );
 }
 
+/** Render the dashboard appropriate to the user's highest-privilege workspace role. */
+function RoleDashboard() {
+  const { session } = useAuth();
+  const roles = session?.currentRoles ?? [];
+
+  // Owner accounts may also carry manager; prefer the owner workspace.
+  if (roles.includes('owner')) return <OwnerLanding />;
+  if (roles.includes('reviewer')) return <ReviewerLanding />;
+  if (roles.includes('manager')) return <ManagerLanding />;
+  if (roles.includes('creator')) return <CreatorLanding />;
+
+  return <NoAccess requiredRoles={['creator', 'manager', 'reviewer', 'owner']} />;
+}
+
 /** Root layout route - renders protected Layout with Outlet. */
 function RootLayout({ children: _children }: { children?: React.ReactNode }) {
   return (
