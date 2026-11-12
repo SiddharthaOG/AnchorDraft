@@ -476,11 +476,10 @@ def run_deterministic_visual_checks(
             f.asset_id = asset_id
         all_findings.extend(findings)
 
-    if guidelines.logo:
-        logo_approved_hashes = approved_logo_hashes or guidelines.logo.get("approved_hashes", [])
-        findings = check_logo_compliance(asset_id, img, guidelines.logo, logo_approved_hashes)
-        for f in findings:
-            f.asset_id = asset_id
-        all_findings.extend(findings)
+    # Logo rules are evaluated by the vision model against the full creative.
+    # Comparing the whole creative's perceptual hash with a standalone logo
+    # hash creates false positives because the logo is only one region.
+    # Keep the legacy helper for standalone logo-image workflows, but do not
+    # run it against full content creatives.
 
     return all_findings

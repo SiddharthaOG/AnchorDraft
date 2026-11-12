@@ -73,6 +73,7 @@ const {
   createReviewPreview,
   confirmReviewPreview,
   uploadVisualAsset,
+  updateKitVisualGuidelines,
   createRule,
   updateRule,
   deleteRule,
@@ -1137,6 +1138,69 @@ describe('review preview and confirmation API', () => {
     await expect(createReviewPreview('revision-1')).rejects.toMatchObject({
       name: 'ReviewEngineError',
       status: 500,
+    });
+  });
+});
+
+describe('visual guideline configuration API', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch.mockReset();
+    mockAuthGetSession.mockResolvedValue({
+      data: { session: { access_token: 'test-token' } },
+      error: null,
+    });
+  });
+
+  it('sends the validated guideline document to the owner API', async () => {
+    const visualGuidelines = {
+      palette: {
+        colors: [{ name: 'Primary', hex: '#123456' }],
+        tolerance: 12,
+        allow_neutrals: true,
+      },
+    };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ kit_id: 'kit-draft-1', visual_guidelines: visualGuidelines }),
+    });
+
+    const result = await updateKitVisualGuidelines('kit-draft-1', visualGuidelines);
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/v1/kits/kit-draft-1/visual-guidelines'),
+      expect.objectContaining({
+        method: 'PUT',
+        cache: 'no-store',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-token',
+          'Content-Type': 'application/json',
+        }),
+      }),
+    );
+    const request = mockFetch.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(request.body as string)).toEqual({ visual_guidelines: visualGuidelines });
+    expect(result).toEqual(visualGuidelines);
+  });
+
+  it('surfaces server-side draft immutability errors', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      statusText: 'Conflict',
+      json: async () => ({
+        detail: {
+          error: {
+            code: 'kit_not_editable',
+            message: 'Visual guidelines can only be changed on draft kits',
+          },
+        },
+      }),
+    });
+
+    await expect(updateKitVisualGuidelines('kit-active-1', {})).rejects.toMatchObject({
+      status: 409,
+      message: 'Visual guidelines can only be changed on draft kits',
     });
   });
 });

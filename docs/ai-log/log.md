@@ -362,3 +362,31 @@ Changes:
 - Frontend production build: succeeded; existing ineffective dynamic-import warning remains.
 - `git diff --check`: passed.
 - No backend or database changes were required for this issue.
+
+
+## 2026-11-12 - Owner Visual Brand Guideline Configuration
+
+### Implementation
+
+- Added owner-only `PUT /v1/kits/{kit_id}/visual-guidelines`, scoped to the authenticated user's organisation and restricted to draft kits.
+- Validates logo description/variants, palette colors/tolerance, and contrast thresholds with strict nested schemas and unknown-field rejection.
+- Saves guideline changes and metadata-only audit events in one database transaction; audit details do not include raw brand configuration values.
+- Added structured owner UI controls for logo, palette, and contrast guidance in the kit detail editor. Active kits remain read-only; cloning is required to edit a new draft.
+- Added PUT to CORS and a preflight regression test.
+- Added a database trigger so cloned kits and accepted guideline-suggestion versions inherit the source kit's visual guidelines.
+- Removed the whole-creative perceptual-hash logo comparison from deterministic checks. A creative's full-image hash cannot reliably identify a logo embedded within it; logo description, variants, presence, and placement are assessed by the vision model instead.
+- Kit lint now rejects invalid visual guideline configuration before activation.
+
+### Verification
+
+- Backend full suite: **740 passed, 4 skipped**.
+- Frontend full suite: **210 passed across 12 files**.
+- Frontend TypeScript build and Vite production build: **passed**.
+- `git diff --check`: passed.
+- Existing warnings remain: Starlette/httpx deprecations, nested-anchor warnings in existing dashboard StatCards, and Vite's existing ineffective dynamic-import warning.
+
+### Deployment status
+
+- No hosted database migration was applied.
+- No staging or production deployment was triggered.
+- The visual guideline inheritance trigger requires staging migration verification before merge.

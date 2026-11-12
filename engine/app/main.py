@@ -45,7 +45,7 @@ def create_app() -> FastAPI:
         # Preview deployments use both branch aliases and immutable deployment URLs.
         allow_origin_regex=r"^https://anchordraft(?:-[a-z0-9-]+)?-siddharthaog\.vercel\.app$",
         allow_credentials=True,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "OPTIONS"],
         allow_headers=["X-Request-Id", "Authorization", "Content-Type"],
         expose_headers=["X-Request-Id"],
     )

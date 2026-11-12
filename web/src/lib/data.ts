@@ -9,6 +9,26 @@ const supabase = getSupabaseClient();
 // Type definitions matching database schema
 // ============================================================
 
+export interface VisualGuidelines {
+  logo?: {
+    required?: boolean;
+    description?: string;
+    variants?: string[];
+    clear_space_ratio?: number;
+    min_size_px?: number;
+  };
+  palette?: {
+    colors: Array<{ name: string; hex: string }>;
+    tolerance?: number;
+    allow_neutrals?: boolean;
+  };
+  contrast?: {
+    min_ratio?: number;
+    level?: 'AA' | 'AAA';
+    ignore_backgrounds?: string[];
+  };
+}
+
 export interface BrandKit {
   id: string;
   org_id: string;
@@ -19,6 +39,7 @@ export interface BrandKit {
   created_by: string;
   created_at: string;
   activated_at: string | null;
+  visual_guidelines?: VisualGuidelines | null;
 }
 
 export interface Rule {
@@ -1006,6 +1027,61 @@ async function getAuthToken(): Promise<string> {
     throw new ReviewEngineError('No valid session', 401);
   }
   return data.session.access_token;
+}
+
+
+export async function updateKitVisualGuidelines(
+  kitId: string,
+  visualGuidelines: VisualGuidelines,
+): Promise<VisualGuidelines> {
+  const token = await getAuthToken();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await fetch(getEngineUrl() + '/v1/kits/' + encodeURIComponent(kitId) + '/visual-guidelines', {
+      method: 'PUT',
+      signal: controller.signal,
+      cache: 'no-store',
+      headers: {
+        Authorization: 'Bearer ' + token,
+        'Content-Type': 'application/json',
+        'X-Request-Id': crypto.randomUUID(),
+      },
+      body: JSON.stringify({ visual_guidelines: visualGuidelines }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const apiError = getApiErrorDetails(errorData);
+      throw new ReviewEngineError(
+        apiError.message || ('Visual guideline update failed: ' + response.status + ' ' + response.statusText),
+        response.status,
+        undefined,
+        apiError.reason,
+        apiError.retryAfterSeconds,
+      );
+    }
+    const data: unknown = await response.json();
+    if (!data || typeof data !== 'object' || !('visual_guidelines' in data)) {
+      throw new ReviewEngineError('The visual guideline update response was invalid.', 500);
+    }
+    const saved = (data as { visual_guidelines: unknown }).visual_guidelines;
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+      throw new ReviewEngineError('The saved visual guidelines were invalid.', 500);
+    }
+    return saved as VisualGuidelines;
+  } catch (err) {
+    if (err instanceof ReviewEngineError) throw err;
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new ReviewEngineError('Visual guideline update timed out.', 504, err);
+    }
+    throw new ReviewEngineError(
+      err instanceof Error ? err.message : 'Network error',
+      0,
+      err instanceof Error ? err : undefined,
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 // ============================================================
