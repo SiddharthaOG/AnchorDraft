@@ -10,6 +10,7 @@ from app.llm.provider_factory import (
     ProviderConfigError,
     create_provider,
     create_fallback_provider,
+    create_fallback_vision_provider,
     get_provider,
     get_provider_with_fallback,
     ProviderWithFallback,
@@ -72,6 +73,7 @@ class TestProviderSettings:
         assert settings.provider_type == ProviderType.FAKE
         assert settings.groq_model == "openai/gpt-oss-120b"
         assert settings.gemini_model == "gemini-3.8-flash"
+        assert settings.gemini_fallback_model == "gemini-3.6-flash"
         assert settings.fallback_enabled is True
         assert settings.fallback_provider == ProviderType.GEMINI
 
@@ -163,7 +165,7 @@ class TestCreateFallbackProvider:
         assert fallback is None
 
     def test_fallback_same_as_primary_returns_none(self):
-        """Test that fallback same as primary returns None."""
+        """Test that a same-vendor Groq fallback is still disabled."""
         settings = ProviderSettings(
             provider_type=ProviderType.GROQ,
             groq_api_key="test-key",
@@ -171,6 +173,41 @@ class TestCreateFallbackProvider:
         )
         fallback = create_fallback_provider(settings)
         assert fallback is None
+
+    def test_same_gemini_provider_uses_distinct_fallback_model(self):
+        """Gemini can fail over to a different model using the same API key."""
+        settings = ProviderSettings(
+            provider_type=ProviderType.GEMINI,
+            gemini_api_key="test-gemini-key",
+            gemini_model="gemini-3.8-flash",
+            gemini_fallback_model="gemini-3.6-flash",
+            fallback_provider=ProviderType.GEMINI,
+        )
+        fallback = create_fallback_provider(settings)
+        assert isinstance(fallback, GeminiProvider)
+        assert fallback.model == "gemini-3.6-flash"
+
+    def test_same_gemini_model_does_not_create_redundant_fallback(self):
+        settings = ProviderSettings(
+            provider_type=ProviderType.GEMINI,
+            gemini_api_key="test-gemini-key",
+            gemini_model="gemini-3.8-flash",
+            gemini_fallback_model="gemini-3.8-flash",
+            fallback_provider=ProviderType.GEMINI,
+        )
+        assert create_fallback_provider(settings) is None
+
+    def test_same_gemini_vision_provider_uses_distinct_fallback_model(self):
+        settings = ProviderSettings(
+            provider_type=ProviderType.GEMINI,
+            gemini_api_key="test-gemini-key",
+            gemini_model="gemini-3.8-flash",
+            gemini_fallback_model="gemini-3.6-flash",
+            fallback_provider=ProviderType.GEMINI,
+        )
+        fallback = create_fallback_vision_provider(settings)
+        assert fallback is not None
+        assert fallback.model == "gemini-3.6-flash"
 
     def test_create_gemini_fallback(self):
         """Test creating Gemini fallback."""
@@ -182,6 +219,7 @@ class TestCreateFallbackProvider:
         )
         fallback = create_fallback_provider(settings)
         assert isinstance(fallback, GeminiProvider)
+        assert fallback.model == "gemini-3.6-flash"
 
     def test_create_groq_fallback(self):
         """Test creating Groq fallback."""
@@ -273,6 +311,28 @@ class TestProviderWithFallback:
         result = await wrapper.generate_findings(make_request())
 
         assert result == make_valid_result()
+
+    @pytest.mark.asyncio
+    async def test_hanging_primary_leaves_time_for_fallback(self):
+        """A hung primary must not consume the deadline reserved for fallback."""
+        primary = MagicMock()
+        primary.model = "gemini-3.8-flash"
+
+        async def hang(_request):
+            await asyncio.sleep(10)
+
+        primary.generate_findings = AsyncMock(side_effect=hang)
+        fallback = MagicMock()
+        fallback.model = "gemini-3.6-flash"
+        fallback.generate_findings = AsyncMock(return_value=make_valid_result())
+
+        wrapper = ProviderWithFallback(primary=primary, fallback=fallback)
+        result = await wrapper.generate_findings(make_request(timeout_seconds=2))
+
+        assert result == make_valid_result()
+        primary_request = primary.generate_findings.await_args.args[0]
+        assert primary_request.timeout_seconds == 1
+        fallback.generate_findings.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_fallback_on_unavailable(self):
@@ -1043,8 +1103,8 @@ class TestDeadlineEnforcement:
         assert result == make_valid_result()
 
     @pytest.mark.asyncio
-    async def test_deadline_expired_before_fallback(self):
-        """Test that if deadline expires during primary, fallback is not attempted."""
+    async def test_hung_primary_is_cut_off_to_preserve_fallback_budget(self):
+        """A hung primary is cut off early enough for the fallback to run."""
         primary = MagicMock()
         primary.model = "primary-model"
 
@@ -1061,12 +1121,10 @@ class TestDeadlineEnforcement:
 
         wrapper = ProviderWithFallback(primary=primary, fallback=fallback)
 
-        # Very short timeout - primary takes longer than deadline
-        with pytest.raises(TimeoutError):
-            await wrapper.generate_findings(make_request(timeout_seconds=1))
-
-        # Fallback should not be called because deadline expired during primary
-        fallback.generate_findings.assert_not_called()
+        # The primary is cut off at its reserved budget; fallback uses the remainder.
+        result = await wrapper.generate_findings(make_request(timeout_seconds=1))
+        assert result == make_valid_result()
+        fallback.generate_findings.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_deadline_pre_check_before_fallback(self):
@@ -1108,12 +1166,10 @@ class TestDeadlineEnforcement:
 
         wrapper2 = ProviderWithFallback(primary=primary2, fallback=fallback2)
 
-        # Primary takes 0.8s of 1s deadline, then fails
-        # Fallback should NOT be attempted because deadline would expire
-        with pytest.raises(TimeoutError):
-            await wrapper2.generate_findings(make_request(timeout_seconds=1))
-
-        fallback2.generate_findings.assert_not_called()
+        # The primary is capped to its share of the deadline, so fallback still runs.
+        result = await wrapper2.generate_findings(make_request(timeout_seconds=1))
+        assert result == make_valid_result()
+        fallback2.generate_findings.assert_awaited_once()
 
 
 # ============================================================================

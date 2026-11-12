@@ -453,12 +453,14 @@ class GeminiProvider:
                     for code in ["500", "502", "503", "504", "internal", "unavailable"]
                 ):
                     last_exception = UnavailableError(f"Gemini service unavailable: {error_msg}")
+                    safe_metadata = self._safe_error_metadata(e)
+                    status_code = safe_metadata.get("status_code", safe_metadata.get("code", "unknown"))
                     logger.warning(
-                        "gemini_unavailable",
-                        extra={
-                            "model": self._model,
-                            **self._safe_error_metadata(e),
-                        },
+                        "gemini_unavailable model=%s status=%s error_type=%s",
+                        self._model,
+                        status_code,
+                        type(e).__name__,
+                        extra=safe_metadata,
                     )
 
                 elif "permission" in error_lower and "safety" in error_lower:
