@@ -225,7 +225,7 @@ class TestIntegratedRouterRegistration:
 
     @pytest.mark.asyncio
     async def test_cors_preflight_allows_visual_guideline_put(self, client_comma_separated):
-        response = await client.options(
+        response = await client_comma_separated.options(
             "/v1/kits/22222222-2222-2222-2222-222222222222/visual-guidelines",
             headers={
                 "Origin": "http://localhost:5173",
