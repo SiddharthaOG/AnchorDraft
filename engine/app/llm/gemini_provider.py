@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 class GeminiProvider:
     """Gemini LLM provider using the official google-genai SDK.
 
-    Implements structured JSON output via `generation_config.response_schema`.
+    Implements structured JSON output via Gemini's OpenAPI-compatible `response_schema`.
 
     Model: gemini-3.8-flash (current stable Flash model with structured output)
     """
@@ -73,6 +73,22 @@ class GeminiProvider:
         """Return the model identifier."""
         return self._model
 
+    def _safe_error_metadata(self, error: Exception) -> Dict[str, Any]:
+        """Return bounded provider diagnostics without leaking credentials or request content."""
+        detail = str(error).replace(self._api_key, "[REDACTED_API_KEY]")
+        detail = " ".join(detail.split())[:500]
+        metadata: Dict[str, Any] = {
+            "error_type": type(error).__name__,
+            "error_detail": detail,
+        }
+        # SDK exceptions expose useful HTTP diagnostics inconsistently. Include
+        # only simple scalar attributes; never serialize request/response objects.
+        for attribute in ("code", "status_code"):
+            value = getattr(error, attribute, None)
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                metadata[attribute] = value
+        return metadata
+
     def _build_gemini_schema(self, schema: Dict[str, Any]) -> Dict[str, Any]:
         """Transform the shared OUTPUT_SCHEMA into Gemini-compatible schema.
 
@@ -94,10 +110,22 @@ class GeminiProvider:
             if not isinstance(obj, dict):
                 return obj
 
-            # Handle type arrays for nullable fields (e.g., ["string", "null"])
+            # The installed google-genai 0.3.x SDK models response_schema using
+            # OpenAPI Schema, where nullable is a boolean rather than a JSON
+            # Schema type union. Convert only the supported T|null form.
             if "type" in obj and isinstance(obj["type"], list):
-                # Keep as-is - Gemini supports this
-                pass
+                types_in_union = obj["type"]
+                non_null_types = [value for value in types_in_union if value != "null"]
+                if len(non_null_types) == 1 and len(types_in_union) == 2:
+                    obj["type"] = non_null_types[0]
+                    obj["nullable"] = True
+                else:
+                    raise ValueError("Gemini response_schema supports only single-type nullable unions")
+
+            # response_schema uses the OpenAPI Schema enum spelling (STRING,
+            # NUMBER, OBJECT, ARRAY), unlike the lowercase JSON Schema input.
+            if isinstance(obj.get("type"), str):
+                obj["type"] = obj["type"].upper()
 
             # Recursively adapt nested objects
             if "properties" in obj:
@@ -320,10 +348,10 @@ class GeminiProvider:
                 f"(TPM limit: {self._tpm_limit}, margin: {self.TOKEN_SAFETY_MARGIN * 100:.0f}%)"
             )
 
-        # Build Gemini-compatible schema
+        # Adapt the shared JSON Schema to the OpenAPI Schema subset exposed by
+        # the pinned google-genai SDK. In particular, translate T|null unions
+        # to the SDK's nullable flag before constructing GenerateContentConfig.
         gemini_schema = self._build_gemini_schema(request.output_schema)
-
-        # Prepare generation config
         generation_config = types.GenerateContentConfig(
             temperature=request.randomness,
             max_output_tokens=request.output_limit,
@@ -376,7 +404,12 @@ class GeminiProvider:
                 )
                 logger.warning(
                     "gemini_timeout",
-                    extra={"model": self._model, "attempt": attempt + 1},
+                    extra={
+                        "model": self._model,
+                        "attempt": attempt + 1,
+                        "timeout_seconds": request.timeout_seconds,
+                        "error_type": "asyncio.TimeoutError",
+                    },
                 )
 
             except Exception as e:
@@ -398,14 +431,21 @@ class GeminiProvider:
                     )
                     logger.warning(
                         "gemini_rate_limited",
-                        extra={"model": self._model, "retry_after": retry_after},
+                        extra={
+                            "model": self._model,
+                            "retry_after": retry_after,
+                            **self._safe_error_metadata(e),
+                        },
                     )
 
                 elif "timeout" in error_lower:
                     last_exception = TimeoutError(f"Gemini request timeout: {error_msg}")
                     logger.warning(
                         "gemini_timeout_error",
-                        extra={"model": self._model},
+                        extra={
+                            "model": self._model,
+                            **self._safe_error_metadata(e),
+                        },
                     )
 
                 elif any(
@@ -415,7 +455,10 @@ class GeminiProvider:
                     last_exception = UnavailableError(f"Gemini service unavailable: {error_msg}")
                     logger.warning(
                         "gemini_unavailable",
-                        extra={"model": self._model, "error": error_msg},
+                        extra={
+                            "model": self._model,
+                            **self._safe_error_metadata(e),
+                        },
                     )
 
                 elif "permission" in error_lower and "safety" in error_lower:
@@ -434,7 +477,13 @@ class GeminiProvider:
                     last_exception = BadOutputError(f"Gemini schema validation failed: {error_msg}")
                     logger.warning(
                         "gemini_schema_validation_failed",
-                        extra={"model": self._model, "error": error_msg},
+                        extra={
+                            "model": self._model,
+                            "error_type": type(e).__name__,
+                            # Provider errors describe request/schema validation,
+                            # not the user prompt or response payload. Keep bounded.
+                            "error_detail": error_msg[:400],
+                        },
                     )
 
                 else:
@@ -442,7 +491,10 @@ class GeminiProvider:
                     last_exception = BadOutputError(f"Gemini error: {error_msg}")
                     logger.warning(
                         "gemini_unknown_error",
-                        extra={"model": self._model, "error": error_msg},
+                        extra={
+                            "model": self._model,
+                            **self._safe_error_metadata(e),
+                        },
                     )
 
             # Wait before retry

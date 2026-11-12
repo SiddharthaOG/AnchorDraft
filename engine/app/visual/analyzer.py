@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import hashlib
 from dataclasses import dataclass
 from typing import List, Optional, Set
 from uuid import UUID
@@ -22,7 +23,7 @@ from app.visual.vision_providers import (
     VISUAL_OUTPUT_SCHEMA,
     build_vision_user_content,
 )
-from app.llm.provider_factory import get_provider_with_fallback
+from app.llm.provider_factory import get_vision_provider_with_fallback
 from app.llm.prompt_builder import generate_nonce
 from app.models.pipeline import (
     ProviderRequest,
@@ -35,6 +36,7 @@ from app.models.pipeline import (
     BlockedError,
 )
 from app.auth.supabase import get_supabase_client
+from app.confidentiality import expand_placeholders
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +82,7 @@ class VisualAnalyzer:
                 return response
             return response.data or []
         except Exception as e:
-            logger.error("load_visual_assets_for_review_failed", extra={"revision_id": str(revision_id), "error": str(e)})
+            logger.error("load_visual_assets_for_review_failed", extra={"revision_id": str(revision_id), "error_type": type(e).__name__})
             # Don't silently return empty list on failure - propagate the error
             raise
 
@@ -118,7 +120,7 @@ class VisualAnalyzer:
             if not isinstance(file_bytes, (bytes, bytearray)) or not file_bytes:
                 raise ValueError("Storage returned empty or invalid image bytes")
         except Exception as e:
-            logger.error("asset_download_failed", extra={"asset_id": str(asset_id), "error": str(e)})
+            logger.error("asset_download_failed", extra={"asset_id": str(asset_id), "error_type": type(e).__name__})
             raise RuntimeError(f"Failed to download asset {asset_id}: {e}") from e
 
         # Build metadata from asset record
@@ -151,6 +153,10 @@ class VisualAnalyzer:
         visual_guidelines: dict,
         org_id: UUID,
         approved_logo_hashes: List[str] = None,
+        provider_visual_guidelines: dict = None,
+        placeholder_map: dict[str, str] = None,
+        provider_request_override: ProviderRequest = None,
+        expected_asset_checksums: dict[str, str] = None,
     ) -> VisualAnalysisResult:
         """
         Analyze multiple visual assets for brand compliance.
@@ -186,6 +192,12 @@ class VisualAnalyzer:
         for asset_id in asset_ids:
             try:
                 file_bytes, mime_type, metadata = await self.load_asset_bytes(asset_id, org_id)
+                expected_checksum = (expected_asset_checksums or {}).get(str(asset_id))
+                actual_checksum = hashlib.sha256(file_bytes).hexdigest()
+                if expected_checksum and (
+                    metadata.checksum != expected_checksum or actual_checksum != expected_checksum
+                ):
+                    raise ValueError("Visual asset bytes changed after preview")
                 assets_data.append({
                     "asset_id": asset_id,
                     "file_bytes": file_bytes,
@@ -193,7 +205,7 @@ class VisualAnalyzer:
                     "metadata": metadata,
                 })
             except Exception as e:
-                logger.error("asset_load_failed", extra={"asset_id": str(asset_id), "error": str(e)})
+                logger.error("asset_load_failed", extra={"asset_id": str(asset_id), "error_type": type(e).__name__})
                 raise ValueError(f"Failed to load asset {asset_id}: {e}") from e
 
         # Run deterministic checks on all assets
@@ -228,18 +240,20 @@ class VisualAnalyzer:
                 revision_text=revision_text,
                 purpose=purpose,
                 channel=channel,
-                visual_guidelines=visual_guidelines,
+                visual_guidelines=provider_visual_guidelines if provider_visual_guidelines is not None else visual_guidelines,
                 approved_hashes=approved_hashes,
+                placeholder_map=placeholder_map or {},
+                provider_request_override=provider_request_override,
             )
             all_model_candidates = model_findings
             llm_status = "ok"
         except (RateLimitedError, TimeoutError, UnavailableError, BadOutputError, BlockedError, ProviderError) as e:
-            logger.warning("vision_analysis_failed", extra={"error_type": type(e).__name__, "error": str(e)})
+            logger.warning("vision_analysis_failed", extra={"error_type": type(e).__name__})
             llm_status = "failed"
             warnings.append(f"Vision analysis failed: {type(e).__name__} - deterministic findings preserved")
             all_model_candidates = []
         except Exception as e:
-            logger.exception("vision_analysis_unexpected_error", extra={"error": str(e)})
+            logger.error("vision_analysis_unexpected_error", extra={"error_type": type(e).__name__})
             llm_status = "failed"
             warnings.append(f"Vision analysis error: deterministic findings preserved")
             all_model_candidates = []
@@ -261,18 +275,11 @@ class VisualAnalyzer:
         channel: str,
         visual_guidelines: dict,
         approved_hashes: List[str],
+        placeholder_map: dict[str, str] = None,
+        provider_request_override: ProviderRequest = None,
     ) -> List[VisualModelFindingCandidate]:
         """Run vision model analysis on assets."""
-        provider = get_provider_with_fallback()
-
-        # Check if provider supports vision (has generate_findings with images parameter)
-        # For now, we'll use a simple check
-        supports_vision = hasattr(provider, 'generate_findings') and 'images' in provider.generate_findings.__code__.co_varnames
-
-        if not supports_vision:
-            logger.info("vision_provider_not_supported", extra={"provider": provider.model})
-            # Return empty - fallback to deterministic only
-            return []
+        provider = get_vision_provider_with_fallback()
 
         # Prepare images for provider
         images = []
@@ -285,26 +292,28 @@ class VisualAnalyzer:
             })
             asset_ids.append(str(asset_data["asset_id"]))
 
-        # Build vision request
-        nonce = generate_nonce()
-        system_instruction = VISION_SYSTEM_INSTRUCTION.format(max_findings=25)
-        user_content = build_vision_user_content(
-            draft_text=revision_text,
-            purpose=purpose,
-            channel=channel,
-            visual_guidelines=visual_guidelines,
-            asset_ids=asset_ids,
-            nonce=nonce,
-        )
-
-        provider_request = ProviderRequest(
-            system_instruction=system_instruction,
-            user_content=user_content,
-            output_schema=VISUAL_OUTPUT_SCHEMA,
-            randomness=0.1,
-            output_limit=4096,
-            timeout_seconds=60,  # Longer timeout for vision
-        )
+        # Reuse the exact request approved in the preview when supplied.
+        if provider_request_override is not None:
+            provider_request = provider_request_override
+        else:
+            nonce = generate_nonce()
+            system_instruction = VISION_SYSTEM_INSTRUCTION.format(max_findings=25)
+            user_content = build_vision_user_content(
+                draft_text=revision_text,
+                purpose=purpose,
+                channel=channel,
+                visual_guidelines=visual_guidelines,
+                asset_ids=asset_ids,
+                nonce=nonce,
+            )
+            provider_request = ProviderRequest(
+                system_instruction=system_instruction,
+                user_content=user_content,
+                output_schema=VISUAL_OUTPUT_SCHEMA,
+                randomness=0.1,
+                output_limit=4096,
+                timeout_seconds=60,
+            )
 
         # Call provider with images
         result = await provider.generate_findings(provider_request, images)
@@ -317,9 +326,16 @@ class VisualAnalyzer:
         for finding in raw_findings:
             try:
                 candidate = VisualModelFindingCandidate.model_validate(finding)
+                reverse_map = placeholder_map or {}
+                candidate = candidate.model_copy(update={
+                    "ref_key": expand_placeholders(candidate.ref_key, reverse_map),
+                    "quote": expand_placeholders(candidate.quote, reverse_map),
+                    "explanation": expand_placeholders(candidate.explanation, reverse_map),
+                    "suggestion": expand_placeholders(candidate.suggestion, reverse_map) if candidate.suggestion else None,
+                })
                 model_candidates.append(candidate)
             except Exception as e:
-                logger.warning("visual_finding_validation_failed", extra={"error": str(e), "finding": finding})
+                logger.warning("visual_finding_validation_failed", extra={"error_type": type(e).__name__})
 
         return model_candidates
 
@@ -332,6 +348,10 @@ async def run_visual_analysis(
     visual_guidelines: dict,
     org_id: UUID,
     approved_logo_hashes: List[str] = None,
+    provider_visual_guidelines: dict = None,
+    placeholder_map: dict[str, str] = None,
+    provider_request_override: ProviderRequest = None,
+    expected_asset_checksums: dict[str, str] = None,
 ) -> VisualAnalysisResult:
     """Convenience function to run visual analysis."""
     analyzer = VisualAnalyzer()
@@ -343,4 +363,6 @@ async def run_visual_analysis(
         visual_guidelines=visual_guidelines,
         org_id=org_id,
         approved_logo_hashes=approved_logo_hashes,
+        provider_visual_guidelines=provider_visual_guidelines,
+        placeholder_map=placeholder_map,
     )

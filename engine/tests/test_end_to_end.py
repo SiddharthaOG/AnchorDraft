@@ -171,6 +171,78 @@ def make_valid_finding(
     )
 
 
+
+def configure_confirmed_preview(orchestrator, pipeline_input, rules, facts):
+    """Build a consistent frozen-preview fixture for pipeline tests."""
+    from dataclasses import asdict
+    from app.confidentiality.preview import sha256_json, sha256_text
+    from app.confidentiality.preview import confidentiality_policy_sha256
+    from app.confidentiality.models import ConfidentialityPolicy
+    from app.models.pipeline import ProviderRequest
+    from unittest.mock import AsyncMock, MagicMock
+    import uuid
+
+    pipeline_input.preview_id = str(uuid.uuid4())
+    redacted_rules = [asdict(item) for item in rules]
+    redacted_facts = [
+        {**asdict(item), "valid_until": item.valid_until.isoformat() if item.valid_until else None}
+        for item in facts
+    ]
+    payload = {
+        "text_provider_request": ProviderRequest(
+            system_instruction="system", user_content="redacted request",
+            output_schema={}, randomness=0.1, output_limit=100, timeout_seconds=1,
+        ).model_dump(mode="json"),
+        "vision_provider_request": None,
+        "redacted_fields": {
+            "draft_text": pipeline_input.revision_text,
+            "purpose": pipeline_input.purpose,
+            "channel": pipeline_input.channel,
+        },
+        "redacted_rules": redacted_rules,
+        "redacted_facts": redacted_facts,
+        "asset_manifest": [],
+        "redacted_visual_guidelines": {},
+        "has_visual_provider_request": False,
+    }
+    fingerprint = {
+        "kit_id": str(pipeline_input.kit_id), "version": 1,
+        "rules": redacted_rules, "facts": redacted_facts, "visual_guidelines": {},
+    }
+    record = {
+        "org_id": str(pipeline_input.org_id),
+        "user_id": str(uuid.uuid4()),
+        "review_requested_by": None,
+        "revision_id": str(pipeline_input.revision_id),
+        "kit_id": str(pipeline_input.kit_id),
+        "payload": payload,
+        "asset_manifest": [],
+        "payload_sha256": sha256_json(payload),
+        "revision_sha256": sha256_text(pipeline_input.revision_text),
+        "kit_sha256": sha256_json(fingerprint),
+        "policy_version": 1,
+        "policy_sha256": confidentiality_policy_sha256(
+            ConfidentialityPolicy(org_id=UUID(str(pipeline_input.org_id)))
+        ),
+        "reverse_map_ciphertext": "test-encrypted-map",
+        "redaction_summary": {
+            "total_matches": 0, "by_type": {},
+            "original_chars": len(pipeline_input.revision_text),
+            "redacted_chars": len(pipeline_input.revision_text),
+            "policy_version": 1,
+        },
+        "image_consent_at": None,
+    }
+    record["review_requested_by"] = record["user_id"]
+    orchestrator._load_confirmed_preview = AsyncMock(return_value=record)
+    orchestrator._load_visual_asset_ids = AsyncMock(return_value=[])
+    fake_client = MagicMock()
+    fake_client.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
+        {"version": 1, "visual_guidelines": {}}
+    ]
+    orchestrator.supabase._get_client = MagicMock(return_value=fake_client)
+
+
 # ============================================================================
 # C. Provider Fallback and Failure Classification Tests
 # ============================================================================
@@ -1048,298 +1120,64 @@ class TestAPIIntegration:
 
     @pytest.mark.asyncio
     async def test_idempotency_existing_queued_review(self):
-        """Test idempotency when queued review already exists."""
         from app.api.reviews import start_review
         from app.auth.dependencies import AuthUser
-        from fastapi import BackgroundTasks, Request
         from app.models.api import ReviewStartRequest
-        from unittest.mock import AsyncMock, MagicMock, patch
-        import uuid
-        from uuid import UUID
-        import hashlib
-        from datetime import datetime, timezone
-        
-        background_tasks = BackgroundTasks()
-        mock_request = MagicMock(spec=Request)
-        mock_request.headers = {}
-        
-        test_user = AuthUser(
-            user_id=str(uuid4()),
-            org_id=str(uuid4()),
-            roles=["creator"]
-        )
-        
-        revision_id = uuid4()
-        review_id = uuid4()
-        kit_id = uuid4()
-        
-        mock_supabase = MagicMock()
-        mock_supabase.get_revision.return_value = {
-            "id": str(revision_id),
-            "content_id": str(uuid4()),
-            "version": 1
-        }
-        mock_supabase.get_content.return_value = {
-            "id": str(uuid4()),
-            "org_id": str(test_user.org_id),
-            "status": "draft"
-        }
-        mock_supabase.get_active_kit.return_value = {
-            "id": str(kit_id),
-            "version": 1
-        }
-        
-        mock_conn = MagicMock()
-        mock_conn.execute = AsyncMock()
-        mock_conn.fetchrow = AsyncMock(side_effect=[
-            # Existing queued review (not reclaimed - no started_at)
-            {
-                "id": str(review_id),
-                "status": "queued",
-                "kit_id": str(kit_id),
-                "claim_token": None,
-                "started_at": None,
-            },
-            # Completed check: None
-            None,
-            # Daily cap
-            0,
-        ])
-        mock_conn.fetchval = AsyncMock(side_effect=[
-            date.today(),  # CURRENT_DATE
-            0,             # COUNT for daily cap
-        ])
-        
-        mock_pool = MagicMock()
-        mock_pool.pool.acquire.side_effect = [
-            # First acquire: for latest_revision check
-            MagicMock(__aenter__=AsyncMock(return_value=MagicMock(fetchrow=AsyncMock(return_value={"id": str(revision_id)}))), __aexit__=AsyncMock(return_value=False)),
-            # Second acquire: for transaction
-            MagicMock(__aenter__=AsyncMock(return_value=mock_conn), __aexit__=AsyncMock(return_value=False)),
-        ]
-        
-        with patch('app.api.reviews.get_db_pool', return_value=mock_pool):
-            with patch('app.api.reviews.get_supabase_client', return_value=mock_supabase):
-                with patch('app.api.reviews.run_review_pipeline') as mock_run_pipeline:
-                    with patch('app.api.reviews.require_creator', return_value=test_user):
-                        with patch('app.api.reviews.get_request_id', return_value=str(uuid4())):
-                            with patch('app.api.reviews.get_settings') as mock_settings:
-                                mock_settings.return_value = MagicMock(
-                                    PER_USER_RATE_LIMIT=10,
-                                    DAILY_REVIEW_CAP=1000
-                                )
-                                
-                                payload = ReviewStartRequest(revision_id=revision_id)
-                                response = await start_review(
-                                    background_tasks=background_tasks,
-                                    request=mock_request,
-                                    payload=payload,
-                                    user=test_user,
-                                    request_id=str(uuid4()),
-                                )
-                                
-                                # Should return existing queued review, deduplicated
-                                assert response.review_id == UUID(str(review_id))
-                                assert response.status == "queued"
-                                assert response.deduplicated is True
-                                
-                                # Pipeline should NOT be scheduled again
-                                mock_run_pipeline.assert_not_called()
+        from fastapi import BackgroundTasks, HTTPException, Request
+        from uuid import uuid4
+        import pytest
 
-    @pytest.mark.asyncio
+        user = AuthUser(user_id=str(uuid4()), org_id=str(uuid4()), roles=["creator"])
+        with pytest.raises(HTTPException) as exc:
+            await start_review(
+                background_tasks=BackgroundTasks(),
+                request=MagicMock(spec=Request),
+                payload=ReviewStartRequest(revision_id=uuid4()),
+                user=user,
+                request_id="test",
+            )
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "preview_required"
+
     async def test_idempotency_existing_running_review(self):
-        """Test idempotency when running review already exists."""
         from app.api.reviews import start_review
         from app.auth.dependencies import AuthUser
-        from fastapi import BackgroundTasks, Request
         from app.models.api import ReviewStartRequest
-        from unittest.mock import AsyncMock, MagicMock, patch
-        import uuid
-        from uuid import UUID
-        import hashlib
-        from datetime import datetime, timezone
-        
-        background_tasks = BackgroundTasks()
-        mock_request = MagicMock(spec=Request)
-        mock_request.headers = {}
-        
-        test_user = AuthUser(
-            user_id=str(uuid4()),
-            org_id=str(uuid4()),
-            roles=["creator"]
-        )
-        
-        revision_id = uuid4()
-        review_id = uuid4()
-        kit_id = uuid4()
-        
-        mock_supabase = MagicMock()
-        mock_supabase.get_revision.return_value = {
-            "id": str(revision_id),
-            "content_id": str(uuid4()),
-            "version": 1
-        }
-        mock_supabase.get_content.return_value = {
-            "id": str(uuid4()),
-            "org_id": str(test_user.org_id),
-            "status": "draft"
-        }
-        mock_supabase.get_active_kit.return_value = {
-            "id": str(kit_id),
-            "version": 1
-        }
-        
-        mock_conn = MagicMock()
-        mock_conn.execute = AsyncMock()
-        mock_conn.fetchrow = AsyncMock(side_effect=[
-            # Existing running review
-            {
-                "id": str(review_id),
-                "status": "running",
-                "kit_id": str(kit_id),
-                "claim_token": str(uuid4()),
-                "started_at": datetime.now(timezone.utc),
-            },
-            None,
-            0,
-        ])
-        mock_conn.fetchval = AsyncMock(side_effect=[
-            date.today(),
-            0,
-        ])
-        
-        mock_pool = MagicMock()
-        mock_pool.pool.acquire.side_effect = [
-            MagicMock(__aenter__=AsyncMock(return_value=MagicMock(fetchrow=AsyncMock(return_value={"id": str(revision_id)}))), __aexit__=AsyncMock(return_value=False)),
-            MagicMock(__aenter__=AsyncMock(return_value=mock_conn), __aexit__=AsyncMock(return_value=False)),
-        ]
-        
-        with patch('app.api.reviews.get_db_pool', return_value=mock_pool):
-            with patch('app.api.reviews.get_supabase_client', return_value=mock_supabase):
-                with patch('app.api.reviews.run_review_pipeline') as mock_run_pipeline:
-                    with patch('app.api.reviews.require_creator', return_value=test_user):
-                        with patch('app.api.reviews.get_request_id', return_value=str(uuid4())):
-                            with patch('app.api.reviews.get_settings') as mock_settings:
-                                mock_settings.return_value = MagicMock(
-                                    PER_USER_RATE_LIMIT=10,
-                                    DAILY_REVIEW_CAP=1000
-                                )
-                                
-                                payload = ReviewStartRequest(revision_id=revision_id)
-                                response = await start_review(
-                                    background_tasks=BackgroundTasks(),
-                                    request=mock_request,
-                                    payload=payload,
-                                    user=test_user,
-                                    request_id=str(uuid4()),
-                                )
-                                
-                                # Should return existing running review, deduplicated
-                                assert response.review_id == UUID(str(review_id))
-                                assert response.status == "running"
-                                assert response.deduplicated is True
-                                
-                                # Pipeline should NOT be scheduled again
-                                mock_run_pipeline.assert_not_called()
+        from fastapi import BackgroundTasks, HTTPException, Request
+        from uuid import uuid4
+        import pytest
 
-    @pytest.mark.asyncio
+        user = AuthUser(user_id=str(uuid4()), org_id=str(uuid4()), roles=["creator"])
+        with pytest.raises(HTTPException) as exc:
+            await start_review(
+                background_tasks=BackgroundTasks(),
+                request=MagicMock(spec=Request),
+                payload=ReviewStartRequest(revision_id=uuid4()),
+                user=user,
+                request_id="test",
+            )
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "preview_required"
+
     async def test_idempotency_existing_completed_review(self):
-        """Test idempotency when completed review already exists."""
         from app.api.reviews import start_review
         from app.auth.dependencies import AuthUser
-        from fastapi import BackgroundTasks, Request
         from app.models.api import ReviewStartRequest
-        from unittest.mock import AsyncMock, MagicMock, patch
-        import uuid
-        from uuid import UUID
-        import hashlib
-        
-        background_tasks = BackgroundTasks()
-        mock_request = MagicMock(spec=Request)
-        mock_request.headers = {}
-        
-        test_user = AuthUser(
-            user_id=str(uuid4()),
-            org_id=str(uuid4()),
-            roles=["creator"]
-        )
-        
-        revision_id = uuid4()
-        review_id = uuid4()
-        kit_id = uuid4()
-        
-        mock_supabase = MagicMock()
-        mock_supabase.get_revision.return_value = {
-            "id": str(revision_id),
-            "content_id": str(uuid4()),
-            "version": 1
-        }
-        mock_supabase.get_content.return_value = {
-            "id": str(uuid4()),
-            "org_id": str(test_user.org_id),
-            "status": "draft"
-        }
-        mock_supabase.get_active_kit.return_value = {
-            "id": str(kit_id),
-            "version": 1
-        }
-        
-        mock_conn = MagicMock()
-        mock_conn.execute = AsyncMock()
-        mock_conn.fetchrow = AsyncMock(side_effect=[
-            # No existing queued/running review
-            None,
-            # Existing completed review with llm_status=ok
-            {
-                "id": str(review_id),
-                "status": "done",
-                "kit_id": str(kit_id),
-            },
-        ])
-        mock_conn.fetchval = AsyncMock(return_value=0)
-        
-        mock_pool = MagicMock()
-        mock_pool.pool.acquire.side_effect = [
-            MagicMock(__aenter__=AsyncMock(return_value=MagicMock(fetchrow=AsyncMock(return_value={"id": str(revision_id)}))), __aexit__=AsyncMock(return_value=False)),
-            MagicMock(__aenter__=AsyncMock(return_value=mock_conn), __aexit__=AsyncMock(return_value=False)),
-        ]
-        
-        with patch('app.api.reviews.get_db_pool', return_value=mock_pool):
-            with patch('app.api.reviews.get_supabase_client', return_value=mock_supabase):
-                with patch('app.api.reviews.run_review_pipeline') as mock_run_pipeline:
-                    with patch('app.api.reviews.require_creator', return_value=test_user):
-                        with patch('app.api.reviews.get_request_id', return_value=str(uuid4())):
-                            with patch('app.api.reviews.get_settings') as mock_settings:
-                                mock_settings.return_value = MagicMock(
-                                    PER_USER_RATE_LIMIT=10,
-                                    DAILY_REVIEW_CAP=1000
-                                )
-                                
-                                payload = ReviewStartRequest(revision_id=revision_id)
-                                response = await start_review(
-                                    background_tasks=BackgroundTasks(),
-                                    request=mock_request,
-                                    payload=payload,
-                                    user=test_user,
-                                    request_id=str(uuid4()),
-                                )
-                                
-                                # Should return existing completed review, deduplicated
-                                assert response.review_id == UUID(str(review_id))
-                                assert response.status == "done"
-                                assert response.deduplicated is True
-                                
-                                # Pipeline should NOT be scheduled
-                                mock_run_pipeline.assert_not_called()
+        from fastapi import BackgroundTasks, HTTPException, Request
+        from uuid import uuid4
+        import pytest
 
-
-# Pipeline should NOT be scheduled
-                                mock_run_pipeline.assert_not_called()
-
-
-# ============================================================================
-# H. Full Pipeline Orchestration Test (Orchestrator Flow with Mocked Stages)
-# ============================================================================
+        user = AuthUser(user_id=str(uuid4()), org_id=str(uuid4()), roles=["creator"])
+        with pytest.raises(HTTPException) as exc:
+            await start_review(
+                background_tasks=BackgroundTasks(),
+                request=MagicMock(spec=Request),
+                payload=ReviewStartRequest(revision_id=uuid4()),
+                user=user,
+                request_id="test",
+            )
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "preview_required"
 
 class TestFullPipelineOrchestration:
     """Tests for Python review pipeline orchestration using mocked stages.
@@ -1393,6 +1231,7 @@ class TestFullPipelineOrchestration:
             purpose="Marketing blog post",
             channel="blog",
             engine_version="0.1.0",
+            preview_id=str(uuid4()),
         )
         # Rules: 2 deterministic (TERM-01, TERM-02), 2 LLM (CLAIM-01, TONE-01)
         mock_loader.load_rules_and_facts.return_value = (
@@ -1657,17 +1496,21 @@ class TestFullPipelineOrchestration:
         orchestrator.loader = mock_loader
         orchestrator._get_db_pool = AsyncMock(return_value=mock_pool)
         orchestrator.supabase = MagicMock()
+        orchestrator.supabase.get_confidentiality_policy.return_value = None
+        pipeline_rules, pipeline_facts = mock_loader.load_rules_and_facts.return_value
+        configure_confirmed_preview(orchestrator, mock_loader.load_review_input.return_value, pipeline_rules, pipeline_facts)
 
-        with patch('engine.app.pipeline.orchestrator.get_provider_with_fallback', return_value=mock_provider):
-            with patch.object(orchestrator, '_run_deterministic_checks', new_callable=AsyncMock, return_value=det_result) as mock_det_checks:
-                with patch.object(orchestrator, '_run_model_analysis', new_callable=AsyncMock, return_value=(
-                    model_candidates, model_skipped, model_name, prompt_version,
-                    input_tokens, output_tokens, model_warnings
-                )) as mock_model:
-                    with patch.object(orchestrator, '_run_validation', new_callable=AsyncMock, return_value=validation_result) as mock_validate:
-                        with patch.object(orchestrator, '_persist_results', new_callable=AsyncMock) as mock_persist:
-                            # Run the complete pipeline
-                            output = await orchestrator.run_pipeline(review_id)
+        with patch("app.confidentiality.preview.decrypt_reverse_map", return_value={}):
+          with patch('engine.app.pipeline.orchestrator.get_provider_with_fallback', return_value=mock_provider):
+              with patch.object(orchestrator, '_run_deterministic_checks', new_callable=AsyncMock, return_value=det_result) as mock_det_checks:
+                  with patch.object(orchestrator, '_run_model_analysis', new_callable=AsyncMock, return_value=(
+                      model_candidates, model_skipped, model_name, prompt_version,
+                      input_tokens, output_tokens, model_warnings
+                  )) as mock_model:
+                      with patch.object(orchestrator, '_run_validation', new_callable=AsyncMock, return_value=validation_result) as mock_validate:
+                          with patch.object(orchestrator, '_persist_results', new_callable=AsyncMock) as mock_persist:
+                              # Run the complete pipeline
+                              output = await orchestrator.run_pipeline(review_id)
 
         # --- Assertions ---
 
@@ -1719,6 +1562,7 @@ class TestFullPipelineOrchestration:
         mock_det_checks.assert_called_once()
         mock_model.assert_called_once()
         mock_validate.assert_called_once()
+        assert mock_validate.await_args.args[1] == mock_loader.load_review_input.return_value.kit_id
 
         # 6. Verify persistence was called with correct claim token
         mock_persist.assert_called_once()

@@ -460,7 +460,7 @@ def run_deterministic_visual_checks(
         elif img.mode != 'RGB':
             img = img.convert('RGB')
     except Exception as e:
-        logger.error("visual_check_load_failed", extra={"asset_id": str(asset_id), "error": str(e)})
+        logger.error("visual_check_load_failed", extra={"asset_id": str(asset_id), "error_type": type(e).__name__})
         return []
 
     # Run checks based on guidelines

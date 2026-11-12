@@ -182,3 +182,183 @@ curl http://localhost:8000/v1/health
 1. Architect reviews and resolves decision status in ARCHITECTURE.md.
 2. Human creates Vercel/Render/Supabase projects and configures env vars.
 3. Proceed to Slice 1 (Schema, auth, roles, RLS) after approval.
+
+
+## 2026-11-12 — Improvement 2 Integration Hardening Follow-up
+
+### Summary
+
+Traced the reported Start Review no-response regression against the deployed staging service. Render request logs showed that the browser had reached `POST /v1/reviews/preview`, which returned HTTP 422. The previous frontend error parser did not understand FastAPI's array-shaped validation details, and the error was only placed in the page-level toast. The UI now renders preview failures directly beside the Start Review control and translates FastAPI validation details into a readable message.
+
+### Changes
+
+- Updated `web/src/lib/data.ts` to extract FastAPI request-validation locations and messages from `detail[]`, preserving a machine-readable `request_validation_error` reason.
+- Updated `ContentDetail` to show preview failures inline in the Review Status panel; the button retains immediate pending feedback and is disabled while the request is in flight.
+- Added frontend tests for FastAPI 422 parsing and inline preview failure visibility.
+- Configured the **staging Render service only** to select Gemini as its primary provider (`LLM_PROVIDER=gemini`, model `gemini-3.8-flash`). Disabled provider fallback because only the Gemini credential was confirmed for this staging configuration; no second provider credential was assumed. No secret values were read or written to the repository.
+
+### Verification
+
+- Engine: `py -3.12 -m pytest tests -q` — **702 passed, 4 skipped, 2 warnings**.
+- Web: `npm test -- --reporter=dot` — **183 passed**.
+- Web: `npm run build` — succeeded; existing Vite dynamic-import warning remains.
+- Provider factory smoke test with a non-secret placeholder credential and staging environment — instantiated `GeminiProvider` with model `gemini-3.8-flash`; this verifies provider selection, not the real API credential.
+- Render staging `/v1/health?deep=1` — `status=ok`, database connected.
+- Render CORS preflight for the current Vercel branch alias — HTTP 200 with the exact allow-origin and required headers.
+- Vercel branch deployment for commit `d6fb3e1` — READY and assigned to the branch alias.
+
+### Not Yet Verified
+
+- The exact cause inside the earlier HTTP 422 response was not retained in Render logs. The frontend now exposes FastAPI's validation details on the next request; an authenticated browser retest is still required to capture and resolve any underlying request-shape issue.
+- No authenticated preview → consent → confirmation → Gemini provider call was executed in this pass. Real provider acceptance, returned findings, and audit rows remain end-to-end checks, not claimed as complete.
+- Visual asset upload → vision analysis → visual findings and UI rendering remain end-to-end checks. Automated visual and confidentiality suites pass, but this does not replace a live workflow test.
+
+
+## 2026-11-12 — Start Review Silent No-op Guard
+
+### Finding and change
+
+The review-start handler contained a silent early return when `latestRevision?.id` was unavailable: `if (!targetRevisionId || startingReviewRef.current) return`. The button could therefore be visible and clickable while the handler returned without setting loading state, showing an error, or making a request. This is a concrete no-op path consistent with the reported symptom; the screenshot alone does not prove it was the only runtime cause for the user's particular content record.
+
+The handler now resolves the target revision from the explicitly selected revision first, then the selected revision object, then the latest loaded revision. If none exists, it sets a visible inline error and releases the loading/duplicate-submission guard rather than silently returning. A regression test covers the no-revision path.
+
+### Verification
+
+- `npm run test -- --reporter=dot src/features/contents/ContentDetail.test.tsx` — 22 passed.
+- `npm run build` — succeeded; existing Vite dynamic-import warning remains.
+- Full web suite `npm test -- --reporter=dot` — 184 passed across 11 files. Existing nested-anchor React warnings remain in unrelated landing-page tests.
+- `git diff --check` — passed.
+- Commit `781f7d9 fix: prevent silent review start no-op` pushed to `feat/confidentiality-aware-processing`.
+- Vercel Preview deployment for `781f7d9` — READY; branch alias points to this deployment.
+
+### Limitation
+
+No authenticated browser automation/session is available in this pass to prove pointer hit-testing and click delivery in the user's browser. The no-revision silent-return path is fixed and regression-tested; a live retest is still needed to confirm the user's exact record now reaches the preview API.
+
+
+## 2026-11-12 — Root Cause Fix: Latest Revision Identifier Contract
+
+### Root cause
+
+The `v_latest_revision` view exposes the revision primary key as `revision_id` (see `supabase/migrations/20261104000006_views.sql`), while `getLatestRevision()` returned that row directly as the `Revision` interface, whose primary-key field is `id`. `ContentDetail.loadContent()` then assigned `revisionIdRef.current = rev?.id ?? null` and `latestRevision = rev`; therefore a content item with revisions could render its body/version but still have no usable `latestRevision.id`, causing Start Review to report that no revision was loaded.
+
+### Fix
+
+Changed `getLatestRevision()` to query the base `revisions` table ordered by descending version and limited to one row. This returns the canonical full `Revision` shape and avoids maintaining a fragile view-to-Revision field mapping. Added tests for the canonical `id` contract and the no-revisions case.
+
+### Verification
+
+- Targeted data + ContentDetail tests: **100 passed**.
+- Full frontend suite: **186 passed across 11 files**.
+- Frontend production build: succeeded; pre-existing Vite dynamic-import warning remains.
+- `git diff --check`: passed.
+
+### Scope
+
+This fixes the frontend revision-loading contract shared by both Improvement 1 and Improvement 2 workflows. It does not bypass review authorization, preview confirmation, confidentiality policy checks, or image consent.
+
+
+## 2026-11-12 — Preview API 500: Normalize Fact Expiry Dates
+
+### Production-like failure found from Render logs
+
+The user's authenticated `POST /v1/reviews/preview` reached `build_review_preview()` and failed while building the text provider request. Render traceback identified:
+
+`TypeError: '>=' not supported between instances of 'str' and 'datetime.date'`
+
+Supabase returns the `approved_facts.valid_until` DATE column as an ISO date string, but `FactData.valid_until` is consumed as a Python `date`. `SupabaseDataLoader.load_rules_and_facts()` had passed the string through unchanged. This crashed preview generation before any Gemini/provider request. The browser's CORS error was secondary to the HTTP 500 response; the earlier successful CORS preflight did not validate the failing POST path.
+
+### Fixes
+
+- Normalize non-null ISO `valid_until` strings to `datetime.date` in `SupabaseDataLoader.load_rules_and_facts()` at the Supabase boundary. Preserve `None` for non-expiring facts and already-decoded date objects.
+- Added regression coverage proving ISO date strings are parsed and non-expiring facts remain `None`.
+- Changed `getLatestReviewForRevision()` to use Supabase `maybeSingle()` for the expected no-review-yet case. This removes the noisy HTTP 406 response generated by `.single()` when a revision has no reviews.
+- Replaced malformed manually copied GitHub SVG path data in both the router and its test fixture with a valid canonical path. This addresses the browser's SVG `path d: Expected number` warning.
+
+### Verification
+
+- Full backend: **703 passed, 4 skipped, 2 warnings**.
+- Full frontend: **187 passed across 11 files**.
+- Frontend production build: succeeded; existing ineffective dynamic-import warning remains.
+- `git diff --check`: passed.
+
+### Remaining live verification
+
+The code fix is verified locally, but a new Render staging deployment and an authenticated Preview → confirm → Gemini processing run are still required to prove the live pipeline. Permissions-Policy feature warnings are emitted by the hosted response headers/browser compatibility and are not the cause of the preview failure.
+
+
+## 2026-11-12 — Background Pipeline KeyError: Include Review Requester in Preview Query
+
+### Root cause
+
+The user's first live confirmed review reached the background pipeline and failed with `KeyError`. `ReviewOrchestrator._load_confirmed_preview()` selected only `p.*` from `review_previews`, but `run_pipeline()` then validated ownership using `preview_record["review_requested_by"]`. The parent review's `requested_by` field was never selected, so the dictionary lookup failed deterministically after confirmation.
+
+### Fix
+
+- Updated the confirmed-preview query to select `p.*` plus `r.requested_by AS review_requested_by` from the joined parent review.
+- Added a regression test asserting that the selected row contract includes `review_requested_by` and that the join is present.
+- Changed the top-level `pipeline_failed` logger to `logger.exception()` so future unexpected pipeline failures include a traceback while preserving the existing safe, type-only error returned to users. No prompt, source text, PII, image bytes, or reverse map is logged.
+
+### Verification
+
+- Focused orchestrator suite: **19 passed, 4 skipped**.
+- Full backend suite: **704 passed, 4 skipped, 2 warnings**.
+- The previous staging build is live on Render; this fix still requires a new deployment and another real confirmed review to verify provider processing and persisted findings.
+
+### State checkpoint
+
+As of this entry, Improvement 2's live path has successfully completed `POST /v1/reviews/preview` (201 Created) and `POST /v1/reviews/confirm` (202 Accepted) on staging. The confirmed background job then failed on the missing requester field above. The prior date-string normalization fix is already live. Preserve this working preview/confirmation path; do not replace it with a direct review-start path or bypass consent, policy, or preview integrity checks.
+
+
+## 2026-11-12 ? Creator Image Upload UI for Visual Brand Compliance
+
+### Implementation
+
+- Added an **Upload images** section to the content detail page for creators/owners, associated with the latest revision only (the review engine only processes the latest revision).
+- Supports selecting multiple PNG, JPEG/JPG, and WebP files, uploaded sequentially to the existing `POST /v1/imports/visual` endpoint.
+- Added a typed frontend API client using authenticated multipart `FormData`, preserving the browser-generated multipart boundary and carrying `content_id` plus `revision_id`.
+- Client checks empty files, the 10 MB per-image limit, and actual PNG/JPEG/WebP file signatures before upload; it does not trust filename extensions alone.
+- Shows per-file progress/errors and thumbnails from short-lived signed URLs after successful upload.
+- Pauses uploads for historical revision selections and while a review is queued/running. Successful attachment clears the prior review presentation so a fresh privacy preview/consent step is required.
+- Upload does not trigger provider processing or image consent. Existing preview/confirmation safeguards remain the only route to send original image bytes to a vision provider.
+- Reuses the existing backend upload pipeline, which validates image bytes, strips image metadata, writes to private Supabase Storage, records integrity metadata, and associates the asset with the content revision.
+
+### Verification
+
+- Frontend full suite: **194 passed across 11 files**.
+- Targeted upload/data + ContentDetail tests: **108 passed**.
+- `npm run build`: succeeded; existing Vite ineffective dynamic-import warning remains.
+- `git diff --check`: passed.
+
+### Scope and limitations
+
+- Supported image formats deliberately match the backend and visual asset service: PNG, JPEG, WebP. GIF/SVG are not accepted by the existing visual-analysis storage pipeline.
+- The upload section shows previews uploaded during the current page session. Previously linked images remain visible in the review privacy preview; a persistent asset gallery/list endpoint is not part of this UI addition.
+- No backend code or database migration was changed in this upload UI slice.
+
+
+## 2026-11-12 — Review Confirmation 409: Stale Asset Manifest + Hidden UI Error
+
+### Live root cause confirmed from staging database and Render request logs
+
+The latest preview was created at `2026-11-11 20:25:33.847544+00` with an empty `asset_manifest` (`[]`, zero assets). The PNG was successfully uploaded and linked to the same revision at `20:25:36.934938+00`. Confirmation attempts began at `20:25:40.831221+00` and repeatedly returned HTTP 409.
+
+`confirm_review_preview()` intentionally re-queries the revision's visual-asset associations and compares them to the frozen preview manifest. Because the new image was linked after preview creation, `current_ids != preview_asset_ids` and the endpoint correctly raises `assets_changed`. The preview row remained unconsumed. This is expected integrity enforcement, not a provider/Gemini failure.
+
+### Frontend defect and correction
+
+The confirm handler previously sent all unknown errors to the page-level toast. The toast is behind the open modal, so the user saw the click animation but no actionable error. Also, a successful upload now explicitly clears any stale preview state and image consent.
+
+Changes:
+- Invalidate the preview token and image consent after any successful upload.
+- Handle known stale-preview reasons (`assets_changed`, `asset_changed`, `revision_changed`, `not_latest_revision`, `revision_not_editable`, `active_kit_changed`, `kit_changed`, `policy_changed`, `preview_integrity_failed`, `preview_not_available`) by closing the stale dialog and showing actionable guidance to prepare a fresh preview.
+- Keep unexpected confirmation/network/server errors visible inside the preview dialog via a modal-local alert instead of a toast hidden behind it.
+- Existing `preview_expired` and `preview_already_consumed` handling remains, with modal closure and review status refresh as appropriate.
+- Added regression tests for stale image-manifest conflicts and visible unexpected confirmation failures.
+
+### Verification
+
+- Frontend suite: **196 passed across 11 files**.
+- Frontend production build: succeeded; existing ineffective dynamic-import warning remains.
+- `git diff --check`: passed.
+- No backend or database changes were required for this issue.

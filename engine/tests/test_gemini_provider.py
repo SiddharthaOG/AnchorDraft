@@ -110,8 +110,8 @@ class TestGeminiProviderInit:
 class TestGeminiSchemaAdaptation:
     """Tests for Gemini schema adaptation."""
 
-    def test_adapt_schema_preserves_nullable_types(self):
-        """Test that nullable type arrays are preserved for Gemini."""
+    def test_adapt_schema_converts_nullable_type_unions(self):
+        """Translate JSON Schema T|null unions to OpenAPI nullable fields."""
         provider = GeminiProvider(api_key="test-key")
 
         schema = {
@@ -137,8 +137,10 @@ class TestGeminiSchemaAdaptation:
         suggestion = adapted["properties"]["findings"]["items"]["properties"]["suggestion"]
         confidence = adapted["properties"]["findings"]["items"]["properties"]["confidence"]
 
-        assert suggestion["type"] == ["string", "null"]
-        assert confidence["type"] == ["number", "null"]
+        assert suggestion["type"] == "STRING"
+        assert suggestion["nullable"] is True
+        assert confidence["type"] == "NUMBER"
+        assert confidence["nullable"] is True
 
     def test_adapt_schema_preserves_enum(self):
         """Test that enum constraints are preserved."""
@@ -438,6 +440,19 @@ class TestGeminiResponseParsing:
 class TestGeminiErrorMapping:
     """Tests for error mapping in generate_findings."""
 
+    def test_safe_error_metadata_is_bounded_and_redacts_api_key(self):
+        provider = GeminiProvider(api_key="secret-test-key")
+        error = Exception("503 Service Unavailable secret-test-key " + ("x" * 700))
+        error.status_code = 503
+
+        metadata = provider._safe_error_metadata(error)
+
+        assert metadata["error_type"] == "Exception"
+        assert metadata["status_code"] == 503
+        assert "secret-test-key" not in metadata["error_detail"]
+        assert "[REDACTED_API_KEY]" in metadata["error_detail"]
+        assert len(metadata["error_detail"]) <= 500
+
     @pytest.mark.asyncio
     async def test_rate_limit_mapped(self):
         """Test that rate limit errors are mapped to RateLimitedError."""
@@ -533,6 +548,45 @@ class TestGeminiErrorMapping:
             result = await provider.generate_findings(request)
             assert isinstance(result, ProviderResult)
             assert call_count == 2
+
+
+    @pytest.mark.asyncio
+    async def test_uses_adapted_openapi_schema_field_for_shared_output_contract(self):
+        provider = GeminiProvider(api_key="test-key")
+        request = make_request(output_schema={
+            "type": "object",
+            "properties": {
+                "findings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "suggestion": {"type": ["string", "null"]},
+                            "confidence": {"type": ["number", "null"]},
+                        },
+                        "required": ["suggestion", "confidence"],
+                    },
+                },
+            },
+            "required": ["findings"],
+        })
+        response = MagicMock()
+        candidate = MagicMock()
+        candidate.content.parts = [MagicMock(text=make_valid_response())]
+        candidate.finish_reason = "STOP"
+        response.candidates = [candidate]
+        response.usage_metadata = MagicMock(
+            prompt_token_count=100, candidates_token_count=50
+        )
+        with patch.object(
+            provider._client.aio.models, "generate_content", new=AsyncMock(return_value=response)
+        ) as mock_generate:
+            await provider.generate_findings(request)
+        config = mock_generate.await_args.kwargs["config"]
+        assert not hasattr(config, "response_json_schema")
+        assert config.response_schema["properties"]["findings"]["items"]["properties"]["suggestion"] == {
+            "type": "STRING", "nullable": True
+        }
 
 
 # ============================================================================

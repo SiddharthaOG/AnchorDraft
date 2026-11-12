@@ -8,13 +8,15 @@ import asyncio
 import json
 import logging
 import time
+from datetime import date
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 from uuid import UUID
 
 from app.auth.supabase import get_supabase_client
 from app.checks import run_deterministic_checks, DeterministicCheckResult
+from app.checks.deterministic import RuleConfig, SkippedCheck, check_map
 from app.llm import get_provider_with_fallback
 from app.models.pipeline import (
     ProviderRequest,
@@ -47,6 +49,11 @@ from app.models.pipeline import (
 )
 from app.store.db import get_db_pool
 from app.auth.supabase import SupabaseClient
+from app.confidentiality import (
+    ConfidentialityEngine,
+    ConfidentialityPolicyStore,
+    expand_placeholders,
+)
 from app.visual import (
     run_visual_analysis,
     VisualGuideline,
@@ -75,6 +82,7 @@ class PipelineInput:
     purpose: str
     channel: str
     engine_version: str
+    preview_id: str | None = None
 
 
 @dataclass
@@ -141,6 +149,7 @@ class SupabaseDataLoader:
             purpose=content["purpose"],
             channel=content["channel"],
             engine_version=review["engine_version"],
+            preview_id=review.get("preview_id"),
         )
 
     def load_rules_and_facts(self, kit_id: str) -> tuple[list[RuleData], list[FactData]]:
@@ -160,6 +169,7 @@ class SupabaseDataLoader:
                 guideline_text=r["guideline_text"],
                 check_kind=r["check_kind"],
                 needs_reviewer=r.get("needs_reviewer", False),
+                config=r.get("config"),
             ))
 
         facts = []
@@ -168,7 +178,11 @@ class SupabaseDataLoader:
                 fact_key=f["fact_key"],
                 statement=f["statement"],
                 source_note=f["source_note"],
-                valid_until=f["valid_until"],
+                valid_until=(
+                    date.fromisoformat(f["valid_until"])
+                    if isinstance(f.get("valid_until"), str)
+                    else f.get("valid_until")
+                ),
             ))
 
         return rules, facts
@@ -268,15 +282,100 @@ class ReviewOrchestrator:
         """Load all data needed for the pipeline."""
         return self.loader.load_review_input(review_id)
 
+    async def _load_confirmed_preview(self, review_id: str, preview_id: str):
+        """Load only the preview atomically consumed by this review."""
+        pool = await self._get_db_pool()
+        async with pool.pool.acquire() as conn:
+            return await conn.fetchrow(
+                """
+                SELECT p.*, r.requested_by AS review_requested_by
+                FROM review_previews p
+                JOIN reviews r ON r.preview_id=p.id
+                WHERE r.id=$1 AND p.id=$2 AND p.review_id=r.id
+                  AND p.consumed_at IS NOT NULL
+                  AND p.confirmed_by=r.requested_by
+                """,
+                uuid.UUID(review_id), uuid.UUID(preview_id),
+            )
+
+    @staticmethod
+    def _resolve_deterministic_rule(rule: RuleData) -> tuple[RuleConfig | None, str | None]:
+        """Convert persisted rule data into a validated check configuration.
+
+        Newer records may declare ``config.check``. Older records in existing
+        kits predate that discriminator, so infer only from an unambiguous
+        required-key signature. Never guess when the configuration is absent,
+        malformed, ambiguous, or names an unsupported check.
+        """
+        config = rule.config
+        if not isinstance(config, dict):
+            return None, "Deterministic rule config must be an object"
+
+        declared = config.get("check")
+        signatures = {
+            "term_map": {"entries"},
+            "phrase_list": {"phrases"},
+            "missing_alt_text": {"min_length", "generic"},
+            "required_disclosure": {"when_any", "require_any"},
+        }
+
+        if declared is not None:
+            if not isinstance(declared, str) or declared not in check_map or check_map[declared] is None:
+                return None, f"Unsupported deterministic check type: {declared!r}"
+            check_name = declared
+        else:
+            matches = [
+                name for name, required_keys in signatures.items()
+                if required_keys.issubset(config.keys())
+            ]
+            if len(matches) != 1:
+                reason = "Ambiguous deterministic config shape" if matches else "Cannot infer deterministic check type from config"
+                return None, reason
+            check_name = matches[0]
+
+        check_config = {key: value for key, value in config.items() if key != "check"}
+        rule_config = RuleConfig(
+            check=check_name,
+            config=check_config,
+            rule_key=rule.rule_key,
+            category=rule.category,
+            severity=rule.severity,
+            guideline_text=rule.guideline_text,
+            needs_reviewer=rule.needs_reviewer,
+        )
+        try:
+            checker = check_map[check_name](rule_config)
+            checker.validate_config()
+        except (TypeError, ValueError) as exc:
+            return None, f"Invalid {check_name} config: {exc}"
+        except Exception as exc:
+            return None, f"Unable to initialize {check_name} check: {type(exc).__name__}"
+        return rule_config, None
+
     async def _run_deterministic_checks(
         self,
         text: str,
         rules: list[RuleData],
     ) -> DeterministicCheckResult:
-        """Run deterministic checks against the revision text."""
-        # Filter to only deterministic rules
+        """Run deterministic checks; isolate unsupported rules as skipped."""
         deterministic_rules = [r for r in rules if r.check_kind == "deterministic"]
-        return run_deterministic_checks(text, deterministic_rules)
+        resolved: list[RuleConfig] = []
+        skipped: list[SkippedCheck] = []
+
+        for rule in deterministic_rules:
+            rule_config, reason = self._resolve_deterministic_rule(rule)
+            if rule_config is None:
+                skipped.append(SkippedCheck(
+                    rule_key=rule.rule_key,
+                    check_type="unresolved",
+                    reason=reason or "Unsupported deterministic configuration",
+                ))
+            else:
+                resolved.append(rule_config)
+
+        result = run_deterministic_checks(text, resolved)
+        result.skipped_checks = skipped + result.skipped_checks
+        return result
 
     def _convert_deterministic_to_pipeline(
         self,
@@ -306,6 +405,8 @@ class ReviewOrchestrator:
         facts: list[FactData],
         purpose: str,
         channel: str,
+        placeholder_map: dict[str, str] | None = None,
+        provider_request_override: ProviderRequest | None = None,
     ) -> tuple[list, list, str | None, str | None, int, int, list]:
         """Run model analysis using the provider factory.
 
@@ -331,7 +432,7 @@ class ReviewOrchestrator:
             max_findings=25,
         )
 
-        provider_request = build_provider_request(prompt_input)
+        provider_request = provider_request_override or build_provider_request(prompt_input)
         provider = get_provider_with_fallback()
 
         try:
@@ -356,6 +457,16 @@ class ReviewOrchestrator:
                     # Invalid finding - will be caught by validator
                     pass
 
+            # Restore private placeholders before validating citations against the
+            # original revision. The reverse map never leaves this process.
+            if placeholder_map:
+                for candidate in model_candidates:
+                    candidate.ref_key = expand_placeholders(candidate.ref_key, placeholder_map)
+                    candidate.quote = expand_placeholders(candidate.quote, placeholder_map)
+                    candidate.explanation = expand_placeholders(candidate.explanation, placeholder_map)
+                    if candidate.suggestion:
+                        candidate.suggestion = expand_placeholders(candidate.suggestion, placeholder_map)
+
             return (
                 model_candidates,
                 [],  # skipped - provider handles this internally
@@ -367,14 +478,14 @@ class ReviewOrchestrator:
             )
 
         except TokenBudgetExceededError as e:
-            logger.warning("token_budget_exceeded", extra={"review_id": "unknown", "error": str(e)})
+            logger.warning("token_budget_exceeded", extra={"review_id": "unknown", "error_type": type(e).__name__})
             return [], [], None, None, 0, 0, [f"token budget exceeded: {e}"]
         except (RateLimitedError, TimeoutError, UnavailableError, BadOutputError, BlockedError, ProviderError) as e:
-            logger.warning("provider_error", extra={"review_id": "unknown", "error_type": type(e).__name__, "error": str(e)})
+            logger.warning("provider_error", extra={"review_id": "unknown", "error_type": type(e).__name__})
             raise
         except Exception as e:
-            logger.exception("unexpected_provider_error", extra={"review_id": "unknown", "error": str(e)})
-            raise ProviderError(f"Unexpected provider error: {e}")
+            logger.error("unexpected_provider_error", extra={"review_id": "unknown", "error_type": type(e).__name__})
+            raise ProviderError(f"Unexpected provider error ({type(e).__name__})")
 
     def _extract_offered_keys(self, rules: list[RuleData], facts: list[FactData]) -> tuple[set, set]:
         """Extract keys offered to the model."""
@@ -407,13 +518,14 @@ class ReviewOrchestrator:
 
             return [UUID(asset["id"]) for asset in (response.data or [])]
         except Exception as e:
-            logger.error("load_visual_asset_ids_failed", extra={"revision_id": revision_id, "error": str(e)})
+            logger.error("load_visual_asset_ids_failed", extra={"revision_id": revision_id, "error_type": type(e).__name__})
             # Don't silently return empty list on failure - propagate the error
             raise
 
     async def _run_validation(
         self,
         text: str,
+        kit_id: str,
         deterministic_candidates: list,
         model_candidates: list,
         rules: list,
@@ -425,8 +537,10 @@ class ReviewOrchestrator:
         visual_model_offered_rules: set = None,
     ) -> AggregateValidationResult:
         """Run citation validator on all candidates."""
+        if not kit_id:
+            raise ValueError("kit_id is required for citation validation")
         context = self.loader.load_validation_context(
-            kit_id="",  # We'll pass the kit_id separately
+            kit_id=kit_id,
             model_offered_rule_keys=model_offered_rules,
             model_offered_fact_keys=model_offered_facts,
         )
@@ -472,8 +586,9 @@ class ReviewOrchestrator:
         model: str | None,
         prompt_version: str | None,
         claim_token: uuid.UUID,
+        redaction_summary: dict | None = None,
     ) -> None:
-        """Persist validated findings and update review status via engine_complete_review."""
+        """Persist findings and counts-only redaction audit metadata atomically."""
         pool = await self._get_db_pool()
 
         # Convert findings to JSON for the database function
@@ -506,30 +621,61 @@ class ReviewOrchestrator:
         findings_json = json.dumps(findings_json)
 
         async with pool.pool.acquire() as conn:
-            await conn.execute(
-                """
-                SELECT engine_complete_review(
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    SELECT engine_complete_review(
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+                    )
+                    """,
+                    uuid.UUID(review_id),
+                    "done",
+                    llm_status,
+                    json.dumps(warnings),
+                    llm_findings_raw,
+                    llm_findings_dropped,
+                    json.dumps(validator_stats),
+                    model,
+                    prompt_version,
+                    findings_json,
+                    claim_token,
                 )
-                """,
-                uuid.UUID(review_id),
-                "done",
-                llm_status,
-                json.dumps(warnings),
-                llm_findings_raw,
-                llm_findings_dropped,
-                json.dumps(validator_stats),
-                model,
-                prompt_version,
-                findings_json,
-                claim_token,
-            )
+                if redaction_summary is not None:
+                    # Counts and lengths only: never persist matched source values.
+                    await conn.execute(
+                        """
+                        INSERT INTO public.audit_log
+                            (org_id, actor_id, action, entity_type, entity_id, detail)
+                        SELECT
+                            org_id,
+                            requested_by,
+                            'review.redaction_applied',
+                            'review',
+                            id,
+                            $2::jsonb
+                        FROM public.reviews
+                        WHERE id = $1
+                        """,
+                        uuid.UUID(review_id),
+                        json.dumps(redaction_summary),
+                    )
+                    # The reverse map is no longer needed after findings are validated.
+                    await conn.execute(
+                        """
+                        UPDATE review_previews
+                        SET reverse_map_ciphertext='', payload='{}'::jsonb,
+                            asset_manifest='[]'::jsonb
+                        WHERE review_id=$1
+                        """,
+                        uuid.UUID(review_id),
+                    )
 
     async def _persist_failure(
         self,
         review_id: str,
         error: str,
         claim_token: Optional[uuid.UUID] = None,
+        preview_id: Optional[str] = None,
     ) -> None:
         """Persist review failure via engine_fail_review."""
         pool = await self._get_db_pool()
@@ -548,11 +694,22 @@ class ReviewOrchestrator:
                     error,
                     None,
                 )
+            if preview_id:
+                await conn.execute(
+                    """
+                    UPDATE review_previews
+                    SET reverse_map_ciphertext='', payload='{}'::jsonb,
+                        asset_manifest='[]'::jsonb
+                    WHERE id=$1
+                    """,
+                    uuid.UUID(preview_id),
+                )
 
     async def run_pipeline(self, review_id: str) -> PipelineOutput:
         """Execute the complete review pipeline for a review."""
         start_time = time.time()
         claim_token: Optional[uuid.UUID] = None
+        preview_id: Optional[str] = None
 
         try:
             # 1. Claim the review
@@ -573,39 +730,109 @@ class ReviewOrchestrator:
 
             # 2. Load all data
             pipeline_input = await self._load_review_data(review_id)
+            preview_id = pipeline_input.preview_id
 
             # 3. Load rules and facts
             rules, facts = self.loader.load_rules_and_facts(pipeline_input.kit_id)
+            if not pipeline_input.preview_id:
+                raise RuntimeError("Review has no confirmed confidentiality preview")
+            preview_record = await self._load_confirmed_preview(
+                review_id, pipeline_input.preview_id
+            )
+            if not preview_record:
+                raise RuntimeError("Confirmed review preview is missing or invalid")
+            if (
+                str(preview_record["org_id"]) != str(pipeline_input.org_id)
+                or str(preview_record["revision_id"]) != str(pipeline_input.revision_id)
+                or str(preview_record["kit_id"]) != str(pipeline_input.kit_id)
+                or str(preview_record["user_id"]) != str(preview_record["review_requested_by"])
+            ):
+                raise RuntimeError("Confirmed review preview scope does not match the review")
+            from app.confidentiality.preview import (
+                decrypt_reverse_map, sha256_json, sha256_text, decode_jsonb,
+                confidentiality_policy_sha256,
+            )
+            preview_payload = decode_jsonb(preview_record["payload"], {})
+            preview_assets = decode_jsonb(preview_record["asset_manifest"], [])
+            if preview_assets != (preview_payload.get("asset_manifest") or []):
+                raise RuntimeError("Confirmed preview asset manifest integrity check failed")
+            if preview_record["payload_sha256"] != sha256_json(preview_payload):
+                raise RuntimeError("Confirmed review preview payload integrity check failed")
+            if sha256_text(pipeline_input.revision_text) != preview_record["revision_sha256"]:
+                raise RuntimeError("Revision changed after preview confirmation")
+
+            # Stage 1 (Prepare): reuse the exact frozen, redacted inputs approved by the user.
+            # Original values remain in pipeline_input/rules/facts for deterministic
+            # checks and citation validation; only cloned prompt inputs are redacted.
+            confidentiality_policy = await ConfidentialityPolicyStore(
+                self.supabase
+            ).load_policy(pipeline_input.org_id)
+            if (
+                confidentiality_policy.version != preview_record["policy_version"]
+                or confidentiality_policy_sha256(confidentiality_policy) != preview_record["policy_sha256"]
+            ):
+                raise RuntimeError("Confidentiality policy changed after preview confirmation")
+            redaction_fields = preview_payload["redacted_fields"]
+            reverse_map = decrypt_reverse_map(preview_record["reverse_map_ciphertext"])
+            redacted_rules = [
+                RuleData(**item) for item in preview_payload["redacted_rules"]
+            ]
+            from datetime import date
+            redacted_facts = [
+                FactData(
+                    fact_key=item["fact_key"],
+                    statement=item["statement"],
+                    source_note=item["source_note"],
+                    valid_until=date.fromisoformat(item["valid_until"]) if item.get("valid_until") else None,
+                )
+                for item in preview_payload["redacted_facts"]
+            ]
+            redacted_revision_text = redaction_fields["draft_text"]
+            redacted_purpose = redaction_fields["purpose"]
+            redacted_channel = redaction_fields["channel"]
+            redaction_summary = dict(decode_jsonb(preview_record["redaction_summary"], {}) or {})
+            redaction_summary["asset_count"] = len(preview_payload.get("asset_manifest") or [])
 
             # 3b. Load visual assets associated with this revision.
             asset_ids = await self._load_visual_asset_ids(pipeline_input.revision_id, pipeline_input.org_id)
 
-            # 3c. Visual assets require the kit's guidelines. A failed lookup must
-            # fail the review rather than silently analyze against an empty policy.
-            visual_guidelines = {}
-            if asset_ids:
-                try:
-                    kit = await asyncio.to_thread(
-                        lambda: self.supabase._get_client()
-                        .table("brand_kits")
-                        .select("visual_guidelines")
-                        .eq("id", pipeline_input.kit_id)
-                        .execute()
-                    )
-                except Exception as e:
-                    logger.error(
-                        "visual_guidelines_load_failed",
-                        extra={"kit_id": pipeline_input.kit_id, "error": str(e)},
-                    )
-                    raise RuntimeError("Failed to load visual guidelines for review") from e
+            # Load the current kit snapshot even when no images are attached; the
+            # preview fingerprint binds all policy-bearing kit content.
+            try:
+                kit_response = await asyncio.to_thread(
+                    lambda: self.supabase._get_client()
+                    .table("brand_kits")
+                    .select("version,visual_guidelines")
+                    .eq("id", pipeline_input.kit_id)
+                    .execute()
+                )
+            except Exception as exc:
+                logger.error("visual_guidelines_load_failed", extra={"kit_id": pipeline_input.kit_id, "error_type": type(exc).__name__})
+                raise RuntimeError("Failed to load brand kit snapshot for review") from exc
+            if not kit_response.data:
+                raise RuntimeError("Brand kit snapshot is unavailable")
+            kit_snapshot = kit_response.data[0]
+            visual_guidelines = kit_snapshot.get("visual_guidelines") or {}
+            if not isinstance(visual_guidelines, dict):
+                raise RuntimeError("Visual guidelines must be a JSON object")
 
-                if not kit.data:
-                    raise RuntimeError(
-                        f"Brand kit {pipeline_input.kit_id} was not found while loading visual guidelines"
-                    )
-                visual_guidelines = kit.data[0].get("visual_guidelines") or {}
-                if not isinstance(visual_guidelines, dict):
-                    raise RuntimeError("Visual guidelines must be a JSON object")
+            kit_fingerprint = {
+                "kit_id": pipeline_input.kit_id,
+                "version": kit_snapshot.get("version"),
+                "rules": [__import__("dataclasses").asdict(item) for item in rules],
+                "facts": [__import__("dataclasses").asdict(item) for item in facts],
+                "visual_guidelines": visual_guidelines,
+            }
+            if sha256_json(kit_fingerprint) != preview_record["kit_sha256"]:
+                raise RuntimeError("Brand kit changed after preview confirmation")
+
+            provider_visual_guidelines = preview_payload.get("redacted_visual_guidelines") or {}
+            if asset_ids:
+                if preview_payload.get("vision_provider_request") is not None and not preview_record["image_consent_at"]:
+                    raise RuntimeError("Original image consent was not recorded for this review")
+                expected_manifest = preview_payload.get("asset_manifest") or []
+                if {str(item["id"]) for item in expected_manifest} != {str(item) for item in asset_ids}:
+                    raise RuntimeError("Visual asset set differs from the confirmed preview")
 
             # 4. Extract offered keys
             model_offered_rules, model_offered_facts = self._extract_offered_keys(rules, facts)
@@ -629,12 +856,22 @@ class ReviewOrchestrator:
             if asset_ids:
                 visual_result = await run_visual_analysis(
                     asset_ids=asset_ids,
-                    revision_text=pipeline_input.revision_text,
-                    purpose=pipeline_input.purpose,
-                    channel=pipeline_input.channel,
+                    revision_text=redacted_revision_text,
+                    purpose=redacted_purpose,
+                    channel=redacted_channel,
                     visual_guidelines=visual_guidelines,
                     org_id=UUID(pipeline_input.org_id),
                     approved_logo_hashes=visual_guidelines.get("logo", {}).get("approved_hashes", []) if visual_guidelines else [],
+                    provider_visual_guidelines=provider_visual_guidelines,
+                    placeholder_map=reverse_map,
+                    provider_request_override=(
+                        ProviderRequest.model_validate(preview_payload["vision_provider_request"])
+                        if preview_payload.get("vision_provider_request") else None
+                    ),
+                    expected_asset_checksums={
+                        str(item["id"]): str(item["checksum"])
+                        for item in (preview_payload.get("asset_manifest") or [])
+                    },
                 )
 
             # Visual findings are kept as-is (they have asset_id and region, not quote/offsets)
@@ -658,11 +895,15 @@ class ReviewOrchestrator:
                 # Text model analysis
                 text_model_candidates, _, model, _, input_tokens, output_tokens, model_warnings = \
                     await self._run_model_analysis(
-                        pipeline_input.revision_text,
-                        rules,
-                        facts,
-                        pipeline_input.purpose,
-                        pipeline_input.channel,
+                        redacted_revision_text,
+                        redacted_rules,
+                        redacted_facts,
+                        redacted_purpose,
+                        redacted_channel,
+                        placeholder_map=reverse_map,
+                        provider_request_override=ProviderRequest.model_validate(
+                            preview_payload["text_provider_request"]
+                        ),
                     )
                 llm_findings_raw = len(text_model_candidates)
                 warnings.extend(model_warnings)
@@ -675,7 +916,7 @@ class ReviewOrchestrator:
                 llm_status = "failed"
                 logger.warning(
                     "llm_failed_fallback_to_deterministic",
-                    extra={"review_id": review_id, "error_type": type(e).__name__, "error": str(e)},
+                    extra={"review_id": review_id, "error_type": type(e).__name__},
                 )
                 warnings.append(f"model unavailable: deterministic checks only ({type(e).__name__})")
                 # Visual analysis ran independently; preserve its valid findings.
@@ -683,9 +924,9 @@ class ReviewOrchestrator:
                 warnings.extend(visual_result.warnings)
             except Exception as e:
                 llm_status = "failed"
-                logger.exception(
+                logger.error(
                     "unexpected_llm_error",
-                    extra={"review_id": review_id, "error": str(e)},
+                    extra={"review_id": review_id, "error_type": type(e).__name__},
                 )
                 warnings.append(f"model error: deterministic checks only")
                 model_candidates = []
@@ -697,6 +938,7 @@ class ReviewOrchestrator:
             # 7. Run validation
             validation_result = await self._run_validation(
                 pipeline_input.revision_text,
+                pipeline_input.kit_id,
                 deterministic_candidates,
                 model_candidates,
                 rules,
@@ -729,6 +971,7 @@ class ReviewOrchestrator:
                 model=model,
                 prompt_version=prompt_version,
                 claim_token=claim_token,
+                redaction_summary=redaction_summary,
             )
 
             elapsed = time.time() - start_time
@@ -759,25 +1002,26 @@ class ReviewOrchestrator:
             elapsed = time.time() - start_time
             logger.exception(
                 "pipeline_failed",
-                extra={"review_id": review_id, "elapsed_ms": int((time.time() - start_time) * 1000), "error": str(e)},
+                extra={"review_id": review_id, "elapsed_ms": int((time.time() - start_time) * 1000), "error_type": type(e).__name__},
             )
 
             # Try to persist failure with claim_token for fencing
             try:
-                await self._persist_failure(review_id, str(e), claim_token)
+                safe_error = f"Review processing failed ({type(e).__name__})"
+                await self._persist_failure(review_id, safe_error, claim_token, preview_id)
             except Exception:
-                logger.exception("failed_to_persist_failure", extra={"review_id": review_id})
+                logger.error("failed_to_persist_failure", extra={"review_id": review_id})
 
             return PipelineOutput(
                 validated_findings=[],
                 llm_status="failed",
-                warnings=[f"Pipeline error: {str(e)[:200]}"],
+                warnings=[f"Pipeline error: {type(e).__name__}"],
                 llm_findings_raw=0,
                 llm_findings_dropped=0,
                 validator_stats={},
                 model=None,
                 prompt_version=None,
-                error=str(e)[:500],
+                error=f"Review processing failed ({type(e).__name__})",
             )
 
 

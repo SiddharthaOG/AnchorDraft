@@ -19,11 +19,18 @@ import {
   type Revision,
   type Review,
   type FindingWithDecision,
+  type ReviewPreviewResponse,
+  uploadVisualAsset,
+  type VisualAssetUploadResponse,
 } from '../../lib/data';
-import { startReview } from '../../lib/data';
+import { createReviewPreview, confirmReviewPreview } from '../../lib/data';
 
 interface FindingDisplay extends FindingWithDecision {
   displayQuote: string;
+}
+
+interface UploadedVisualAsset extends VisualAssetUploadResponse {
+  fileName: string;
 }
 
 function StatusBadge({ status }: { status: Content['status'] }) {
@@ -217,6 +224,107 @@ function FindingCard({
   );
 }
 
+function ReviewPreviewDialog({
+  preview, imageConsent, confirming, confirmationError, onImageConsentChange, onConfirm, onCancel,
+}: {
+  preview: ReviewPreviewResponse;
+  imageConsent: boolean;
+  confirming: boolean;
+  confirmationError: string | null;
+  onImageConsentChange: (checked: boolean) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const missingImagePreview = preview.image_consent_required
+    && preview.assets.some(asset => !asset.preview_url);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="presentation">
+      <section role="dialog" aria-modal="true" aria-labelledby="review-preview-title" className="w-full max-w-4xl max-h-[92vh] overflow-hidden rounded-xl bg-white shadow-2xl flex flex-col">
+        <header className="flex items-start justify-between gap-4 border-b border-gray-200 p-5">
+          <div>
+            <h2 id="review-preview-title" className="text-lg font-semibold text-gray-900">Review preview</h2>
+            <p className="mt-1 text-sm text-gray-500">No AI provider has been called. Check the redacted content and disclosures before confirming.</p>
+          </div>
+          <button onClick={onCancel} className="rounded-lg px-3 py-1 text-gray-500 hover:bg-gray-100" aria-label="Close preview">×</button>
+        </header>
+        <div className="overflow-y-auto p-5 space-y-5">
+          <div className="flex flex-wrap items-center gap-3 text-xs text-gray-600">
+            <span className="rounded-full bg-green-50 px-3 py-1 font-medium text-green-800">{preview.redaction_summary.total_matches} sensitive matches masked</span>
+            <span>Expires {new Date(preview.expires_at).toLocaleString()}</span>
+            <span>Policy v{preview.redaction_summary.policy_version}</span>
+          </div>
+          <section>
+            <h3 className="mb-2 font-semibold text-gray-900">Redacted draft sent for review</h3>
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-gray-50 p-4 text-sm text-gray-800">{preview.redacted_draft}</pre>
+          </section>
+          <section className="space-y-2">
+            <h3 className="font-semibold text-gray-900">Text provider request</h3>
+            <details className="rounded-lg border border-gray-200 p-3">
+              <summary className="cursor-pointer text-sm font-medium text-gray-700">Inspect exact system instruction and user prompt</summary>
+              <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-gray-500">System instruction</p>
+              <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-3 text-xs text-gray-700">{preview.text_provider_preview.system_instruction}</pre>
+              <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-gray-500">User content</p>
+              <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-3 text-xs text-gray-700">{preview.text_provider_preview.user_content}</pre>
+            </details>
+          </section>
+          {preview.assets.length > 0 && (
+            <section className="space-y-3">
+              <h3 className="font-semibold text-gray-900">Attached images ({preview.assets.length})</h3>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {preview.assets.map(asset => (
+                  <figure key={asset.id} className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
+                    {asset.preview_url ? <img src={asset.preview_url} alt="Attached visual asset" className="h-36 w-full object-contain bg-gray-100" /> : <div className="flex h-36 items-center justify-center px-3 text-center text-xs text-red-700">Image preview unavailable</div>}
+                    <figcaption className="p-2 text-xs text-gray-600">{asset.width} × {asset.height} · {asset.mime_type}</figcaption>
+                  </figure>
+                ))}
+              </div>
+            </section>
+          )}
+          {preview.vision_provider_preview && (
+            <section className="space-y-2">
+              <h3 className="font-semibold text-gray-900">Vision provider request</h3>
+              <details className="rounded-lg border border-gray-200 p-3">
+                <summary className="cursor-pointer text-sm font-medium text-gray-700">Inspect exact visual-analysis prompt</summary>
+                <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-gray-500">System instruction</p>
+                <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-3 text-xs text-gray-700">{preview.vision_provider_preview.system_instruction}</pre>
+                <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-gray-500">User content</p>
+                <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-3 text-xs text-gray-700">{preview.vision_provider_preview.user_content}</pre>
+              </details>
+            </section>
+          )}
+          {confirmationError && (
+            <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+              {confirmationError}
+            </p>
+          )}
+          {preview.image_consent_required ? (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 space-y-3">
+              <div>
+                <h3 className="font-semibold text-amber-900">Image disclosure</h3>
+                <p className="mt-1 text-sm text-amber-900">The attached images shown above will be sent to the vision AI provider in their stored form. Image pixels are not OCR-redacted. Text fields and visual guidelines are redacted separately.</p>
+              </div>
+              <label className="flex items-start gap-3 text-sm text-amber-950">
+                <input type="checkbox" checked={imageConsent} onChange={event => onImageConsentChange(event.target.checked)} disabled={confirming || missingImagePreview} className="mt-1 h-4 w-4" />
+                <span>I have reviewed the attached images and explicitly consent to sending them in their stored form to the AI vision provider for this review.</span>
+              </label>
+              {missingImagePreview && <p className="text-sm font-medium text-red-700">The image preview could not be loaded. Close this dialog and try again; consent is disabled.</p>}
+            </div>
+          ) : preview.assets.length > 0 ? (
+            <p className="rounded-lg bg-blue-50 p-3 text-sm text-blue-900">Images are attached for local visual checks. This preview contains no vision-provider request, so image bytes will not be sent to an AI provider.</p>
+          ) : null}
+        </div>
+        <footer className="flex flex-wrap justify-end gap-3 border-t border-gray-200 p-5">
+          <button onClick={onCancel} disabled={confirming} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">Cancel</button>
+          <button onClick={onConfirm} disabled={confirming || missingImagePreview || (preview.image_consent_required && !imageConsent)} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-50">
+            {confirming ? 'Confirming...' : 'Confirm & Run Review'}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
 /** Renders the review status section to avoid complex ternary nesting in JSX. */
 function ReviewStatusSection({
   latestReview,
@@ -224,25 +332,33 @@ function ReviewStatusSection({
   startingReview,
   handleStartReview,
   isContentEditable,
+  reviewActionError,
 }: {
   latestReview: Review | null;
   findings: FindingDisplay[];
   startingReview: boolean;
   handleStartReview: () => void;
   isContentEditable: boolean;
+  reviewActionError: string | null;
 }) {
   if (!latestReview) {
     return (
       <div className="text-center py-8 text-gray-500">
         <p>No review started for this revision.</p>
         {isContentEditable && (
+          <>
           <button
-            onClick={handleStartReview}
+            type="button"
+            onClick={() => { void handleStartReview(); }}
             disabled={startingReview}
-            className="mt-4 px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary-dark disabled:opacity-50"
+            aria-busy={startingReview}
+            className="mt-4 inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
           >
-            {startingReview ? 'Starting...' : 'Start Review'}
+            {startingReview ? 'Preparing review preview...' : 'Start Review'}
           </button>
+          <p className="mt-2 text-xs text-gray-500">A privacy preview will appear before any AI provider is called.</p>
+          {reviewActionError && <p role="alert" className="mx-auto mt-3 max-w-xl rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-left text-sm text-red-800">Could not prepare review preview: {reviewActionError}</p>}
+          </>
         )}
       </div>
     );
@@ -263,12 +379,13 @@ function ReviewStatusSection({
     <div className="bg-red-50 border border-red-200 rounded-lg p-4">
       <p className="font-medium text-red-800">Review Failed</p>
       <p className="text-red-600 text-sm mt-1">{latestReview.error || 'Unknown error'}</p>
+      {reviewActionError && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">Could not prepare review preview: {reviewActionError}</p>}
       <button
-        onClick={handleStartReview}
+        onClick={() => handleStartReview()}
         disabled={startingReview}
         className="mt-3 px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary-dark disabled:opacity-50"
       >
-        {startingReview ? 'Retrying...' : 'Retry Review'}
+        {startingReview ? 'Preparing preview...' : 'Preview & Retry'}
       </button>
     </div>
   );
@@ -335,7 +452,16 @@ export function ContentDetail() {
   const [submitting, setSubmitting] = useState(false);
   const [isCreatingRevision, setIsCreatingRevision] = useState(false);
   const [startingReview, setStartingReview] = useState(false);
+  const [reviewActionError, setReviewActionError] = useState<string | null>(null);
+  const [reviewPreview, setReviewPreview] = useState<ReviewPreviewResponse | null>(null);
+  const [imageConsent, setImageConsent] = useState(false);
+  const [confirmingPreview, setConfirmingPreview] = useState(false);
+  const [previewConfirmError, setPreviewConfirmError] = useState<string | null>(null);
   const [applyingDecisions, setApplyingDecisions] = useState(false);
+  const [uploadedVisualAssets, setUploadedVisualAssets] = useState<UploadedVisualAsset[]>([]);
+  const [isUploadingVisualAssets, setIsUploadingVisualAssets] = useState(false);
+  const [visualUploadProgress, setVisualUploadProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [visualUploadError, setVisualUploadError] = useState<string | null>(null);
 
   // Editor visibility state (separate from mutation state)
   const [isRevisionEditorOpen, setIsRevisionEditorOpen] = useState(false);
@@ -344,7 +470,10 @@ export function ContentDetail() {
   const submittingRef = useRef(false);
   const creatingRevisionRef = useRef(false);
   const startingReviewRef = useRef(false);
+  const confirmingPreviewRef = useRef(false);
   const applyingDecisionsRef = useRef(false);
+  const uploadingVisualAssetsRef = useRef(false);
+  const visualUploadInputRef = useRef<HTMLInputElement>(null);
 
   // Error states
   const [toastError, setToastError] = useState<string | null>(null);
@@ -380,6 +509,20 @@ export function ContentDetail() {
       setSelectedRevision(revision);
     }
   }, [latestRevision]);
+
+  useEffect(() => {
+    setReviewPreview(null);
+    setImageConsent(false);
+    setPreviewConfirmError(null);
+    setReviewActionError(null);
+  }, [contentId]);
+
+  // Uploaded previews and errors belong to one exact revision.
+  useEffect(() => {
+    setUploadedVisualAssets([]);
+    setVisualUploadError(null);
+    setVisualUploadProgress(null);
+  }, [contentId, latestRevision?.id]);
 
   // Reset selection when content changes
   useEffect(() => {
@@ -440,8 +583,8 @@ export function ContentDetail() {
     }
   }, [contentId, session?.currentOrgId]);
 
-  const loadReviewData = useCallback(async () => {
-    const revisionId = latestRevision?.id;
+  const loadReviewData = useCallback(async (requestedRevisionId?: string) => {
+    const revisionId = requestedRevisionId ?? latestRevision?.id;
 
     if (!revisionId || pollTimerRef.current !== null) return;
 
@@ -635,6 +778,71 @@ const startPolling = useCallback(() => {
     setPendingSignoffs(0);
   }, [contentId]);
 
+  const handleVisualImageSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.currentTarget.files ?? []);
+    // Clear the input so selecting the same file again triggers another change event.
+    event.currentTarget.value = '';
+    if (files.length === 0) return;
+    if (!content || !latestRevision?.id) {
+      setVisualUploadError('Create a revision before attaching images.');
+      return;
+    }
+    if (selectedRevisionId !== latestRevision.id) {
+      setVisualUploadError('Select the latest revision before attaching images. Visual reviews only process the latest revision.');
+      return;
+    }
+    if (latestReview?.status === 'queued' || latestReview?.status === 'running') {
+      setVisualUploadError('Images cannot be changed while a review is queued or running.');
+      return;
+    }
+    if (uploadingVisualAssetsRef.current) return;
+
+    uploadingVisualAssetsRef.current = true;
+    setIsUploadingVisualAssets(true);
+    setVisualUploadError(null);
+    setVisualUploadProgress({ completed: 0, total: files.length });
+    const failures: string[] = [];
+    let uploadedCount = 0;
+
+    try {
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        try {
+          const result = await uploadVisualAsset(file, content.id, latestRevision.id);
+          setUploadedVisualAssets(current => [
+            ...current.filter(asset => asset.asset_id !== result.asset_id),
+            { ...result, fileName: file.name },
+          ]);
+          uploadedCount += 1;
+        } catch (err) {
+          failures.push(`${file.name}: ${err instanceof Error ? err.message : 'Upload failed'}`);
+        } finally {
+          setVisualUploadProgress({ completed: index + 1, total: files.length });
+        }
+      }
+
+      if (uploadedCount > 0) {
+        // A newly attached image changes the review input set. Invalidate any
+        // preview token created before the upload; it cannot safely be confirmed.
+        setReviewPreview(null);
+        setImageConsent(false);
+        setPreviewConfirmError(null);
+        stopPolling();
+        setLatestReview(null);
+        setFindings([]);
+        setPendingSignoffs(0);
+        setReviewActionError(null);
+      }
+      if (failures.length > 0) {
+        setVisualUploadError(failures.join(' '));
+      }
+    } finally {
+      setIsUploadingVisualAssets(false);
+      setVisualUploadProgress(null);
+      uploadingVisualAssetsRef.current = false;
+    }
+  };
+
   const handleSubmit = async () => {
     if (!content || !latestRevision) return;
     if (submittingRef.current) return;
@@ -686,28 +894,103 @@ const startPolling = useCallback(() => {
     }
   }, [content, loadContent]);
 
-  const handleStartReview = async () => {
-    if (!latestRevision) return;
+  const handleStartReview = async (revisionId?: string) => {
     if (startingReviewRef.current) return;
 
     startingReviewRef.current = true;
     setStartingReview(true);
+    setReviewActionError(null);
+    setPreviewConfirmError(null);
     setToastError(null);
 
+    // Prefer the explicitly selected revision, then fall back to the loaded
+    // revision objects. Never silently return from a visible Start Review action.
+    const targetRevisionId = revisionId ?? selectedRevisionId ?? selectedRevision?.id ?? latestRevision?.id;
+    if (!targetRevisionId) {
+      setReviewActionError('This content has no loaded revision yet. Reload the content and try again.');
+      setStartingReview(false);
+      startingReviewRef.current = false;
+      return;
+    }
+
     try {
-      const result = await startReview(latestRevision.id);
-      // Reload review data to show new review
-      await loadReviewData();
-      return result;
+      const preview = await createReviewPreview(targetRevisionId);
+      setReviewPreview(preview);
+      setImageConsent(false);
     } catch (err) {
-      if (err instanceof Error && 'status' in err && (err as any).status === 409) {
-        setToastError(`Cannot start review: ${err.message}`);
-      } else {
-        setToastError(err instanceof Error ? err.message : 'Failed to start review');
-      }
+      const message = err instanceof Error ? err.message : 'Failed to prepare review preview';
+      setReviewActionError(message);
     } finally {
       setStartingReview(false);
       startingReviewRef.current = false;
+    }
+  };
+
+  const handleConfirmReview = async () => {
+    if (!reviewPreview || confirmingPreviewRef.current) return;
+    if (reviewPreview.image_consent_required && !imageConsent) {
+      setPreviewConfirmError('Explicit image consent is required before this review can start.');
+      return;
+    }
+    confirmingPreviewRef.current = true;
+    setConfirmingPreview(true);
+    setPreviewConfirmError(null);
+    setToastError(null);
+    try {
+      await confirmReviewPreview(reviewPreview.preview_id, reviewPreview.confirmation_token, imageConsent);
+      const confirmedRevisionId = reviewPreview.revision_id;
+      setReviewPreview(null);
+      setImageConsent(false);
+      setPreviewConfirmError(null);
+      await loadReviewData(confirmedRevisionId);
+    } catch (err) {
+      const errorObject = err && typeof err === 'object'
+        ? err as { message?: unknown; reason?: unknown; status?: unknown }
+        : undefined;
+      const message = typeof errorObject?.message === 'string'
+        ? errorObject.message
+        : 'Failed to confirm review';
+      const reason = typeof errorObject?.reason === 'string' ? errorObject.reason : undefined;
+
+      if (reason === 'preview_already_consumed') {
+        const confirmedRevisionId = reviewPreview.revision_id;
+        setReviewPreview(null);
+        setImageConsent(false);
+        setPreviewConfirmError(null);
+        await loadReviewData(confirmedRevisionId);
+        setToastError('This preview was already confirmed. Review status has been refreshed.');
+      } else if (reason === 'preview_expired') {
+        setReviewPreview(null);
+        setImageConsent(false);
+        setPreviewConfirmError(null);
+        setToastError('This preview expired. Click Start Review again to prepare a fresh preview.');
+      } else if ([
+        'preview_integrity_failed',
+        'assets_changed',
+        'asset_changed',
+        'revision_changed',
+        'not_latest_revision',
+        'revision_not_editable',
+        'active_kit_changed',
+        'kit_changed',
+        'policy_changed',
+        'preview_not_available',
+      ].includes(reason || '')) {
+        setReviewPreview(null);
+        setImageConsent(false);
+        setPreviewConfirmError(null);
+        const guidance = reason === 'assets_changed' || reason === 'asset_changed'
+          ? 'Attached images changed after this preview was created.'
+          : 'The revision, brand kit, or confidentiality settings changed after this preview was created.';
+        setToastError(`${guidance} No review was started. Click Start Review again to prepare a fresh preview using the current inputs.`);
+      } else {
+        // Keep unexpected 4xx/5xx errors inside the dialog; the page-level
+        // toast sits behind the modal and previously made these failures look inert.
+        setPreviewConfirmError(message);
+      }
+    } finally {
+      setConfirmingPreview(false);
+      confirmingPreviewRef.current = false;
     }
   };
 
@@ -744,7 +1027,7 @@ const startPolling = useCallback(() => {
       // Start new review automatically
       const newLatestRevision = await getLatestRevision(content.id);
       if (newLatestRevision) {
-        await startReview(newLatestRevision.id);
+        await handleStartReview(newLatestRevision.id);
       }
     } catch (err) {
       setToastError(err instanceof Error ? err.message : 'Failed to apply decisions');
@@ -800,6 +1083,7 @@ const startPolling = useCallback(() => {
   }
 
   const isContentEditable = content.status === 'draft' || content.status === 'changes_requested';
+  const canUploadVisualAssets = session.currentRoles.includes('creator') || session.currentRoles.includes('owner');
   const hasLatestReview = !!latestReview;
   const hasPendingDecisions = findings.some(f => (f.last_action === 'accept' || f.last_action === 'edit') && !f.resulting_revision_id);
   const hasDecisions = findings.some(f => f.last_action);
@@ -919,6 +1203,64 @@ const startPolling = useCallback(() => {
             </div>
           </div>
 
+          {/* Visual assets for Improvement 1 */}
+          {isContentEditable && canUploadVisualAssets && latestRevision && (
+            <section className="bg-white border border-gray-200 rounded-lg" aria-labelledby="visual-assets-title">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 p-4">
+                <div>
+                  <h2 id="visual-assets-title" className="font-semibold text-gray-900">Visual Assets</h2>
+                  <p className="mt-1 text-xs text-gray-500">Images attached to latest revision {latestRevision.version}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => visualUploadInputRef.current?.click()}
+                  disabled={isUploadingVisualAssets || selectedRevisionId !== latestRevision.id || latestReview?.status === 'queued' || latestReview?.status === 'running'}
+                  className="inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isUploadingVisualAssets ? 'Uploading images...' : 'Upload images'}
+                </button>
+                <input
+                  ref={visualUploadInputRef}
+                  aria-label="Choose images to upload"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                  multiple
+                  className="sr-only"
+                  onChange={handleVisualImageSelection}
+                  disabled={isUploadingVisualAssets || selectedRevisionId !== latestRevision.id || latestReview?.status === 'queued' || latestReview?.status === 'running'}
+                />
+              </div>
+              <div className="space-y-3 p-4">
+                <p className="text-xs text-gray-500">PNG, JPG/JPEG, and WebP (10 MB maximum per image). Uploading attaches images to this revision; it does not send them to an AI provider. Image metadata is removed before private storage. The privacy preview will disclose image use and request consent before original image bytes are sent.</p>
+                {selectedRevisionId !== latestRevision.id && (
+                  <p className="text-sm text-amber-800" role="status">Select the latest revision to attach images for visual review.</p>
+                )}
+                {(latestReview?.status === 'queued' || latestReview?.status === 'running') && (
+                  <p className="text-sm text-amber-800" role="status">Image uploads are paused while this revision is being reviewed.</p>
+                )}
+                {visualUploadProgress && (
+                  <p className="text-sm text-gray-600" role="status">Uploading image {visualUploadProgress.completed} of {visualUploadProgress.total}...</p>
+                )}
+                {visualUploadError && <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{visualUploadError}</p>}
+                {uploadedVisualAssets.length === 0 ? (
+                  <p className="text-sm text-gray-500">No images uploaded in this session yet. Existing linked images will appear in the review privacy preview.</p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {uploadedVisualAssets.map(asset => (
+                      <figure key={asset.asset_id} className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
+                        <img src={asset.signed_url} alt={asset.fileName} className="h-32 w-full bg-gray-100 object-contain" />
+                        <figcaption className="space-y-1 p-2">
+                          <p className="truncate text-xs font-medium text-gray-800" title={asset.fileName}>{asset.fileName}</p>
+                          <p className="text-xs text-gray-500">{asset.width} x {asset.height} | {asset.mime_type}</p>
+                        </figcaption>
+                      </figure>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
           {/* Review Status */}
           <div className="bg-white border border-gray-200 rounded-lg">
             <div className="p-4 border-b border-gray-200 flex items-center justify-between">
@@ -934,6 +1276,7 @@ const startPolling = useCallback(() => {
                 startingReview={startingReview}
                 handleStartReview={handleStartReview}
                 isContentEditable={isContentEditable}
+                reviewActionError={reviewActionError}
               />
             </div>
           </div>
@@ -1110,11 +1453,11 @@ const startPolling = useCallback(() => {
                 The LLM processing failed. Only deterministic findings are shown. You can retry the review.
               </p>
               <button
-                onClick={handleStartReview}
+                onClick={() => handleStartReview()}
                 disabled={startingReview}
                 className="w-full px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary-dark disabled:opacity-50"
               >
-                {startingReview ? 'Retrying...' : 'Retry Review'}
+                {startingReview ? 'Preparing preview...' : 'Preview & Retry'}
               </button>
             </div>
           )}
@@ -1143,6 +1486,23 @@ const startPolling = useCallback(() => {
           </div>
         </div>
       </div>
+      {reviewPreview && (
+        <ReviewPreviewDialog
+          preview={reviewPreview}
+          imageConsent={imageConsent}
+          confirming={confirmingPreview}
+          confirmationError={previewConfirmError}
+          onImageConsentChange={setImageConsent}
+          onConfirm={handleConfirmReview}
+          onCancel={() => {
+            if (!confirmingPreview) {
+              setReviewPreview(null);
+              setImageConsent(false);
+              setPreviewConfirmError(null);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

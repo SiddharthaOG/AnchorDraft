@@ -30,6 +30,15 @@ Environment variables (see `.env.example`):
 | `GROQ_API_KEY` | Groq API key | — |
 | `DAILY_REVIEW_CAP` | Max reviews per org per day | `20` |
 
+### Review preview encryption
+
+Generate a Fernet key with:
+    python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+Place it in the engine environment. Never commit the generated value. Set the same PREVIEW_ENCRYPTION_KEY on every Render engine instance. A key mismatch makes pending previews undecryptable; rotate it only after pending previews have expired or been consumed. The preview migration is supabase/migrations/20261111164322_add_review_previews.sql; apply it through the approved migration workflow before enabling the preview endpoints.
+
+The preview stores only redacted provider prompts and a payload hash. The placeholder reverse map is Fernet-encrypted and cleared after terminal processing. Preview records expire after 10 minutes. If attached images will be sent to the vision provider, the creator must explicitly consent; image bytes are not OCR-redacted.
+
 ## Running Tests
 
 ```bash

@@ -367,7 +367,7 @@ If the project's real daily cap is very low (one report suggests it can be about
 | Round 3 improvement | Hook left in this design |
 |---|---|
 | Visual review | The request and result types allow additional input parts later; the `missing_alt_text` check already covers the text side |
-| Confidentiality layer | Stage 1 (Prepare) is a named place where redaction of sensitive terms would run before anything is sent; in Round 2 it does nothing |
+| Confidentiality layer | Implemented in Improvement 2: organisation-scoped policy, pre-prompt redaction across draft/purpose/channel/rules/facts/visual guidelines, typed placeholders, encrypted reverse map, frozen provider payload preview, single-use confirmation, counts-only audit events, and explicit consent for stored image bytes |
 | Guideline-gap analytics | `validator_stats` and the decision history give the raw material; Round 2 already exposes dismissal rates |
 
 ## 13. Tests to write
@@ -436,3 +436,18 @@ Slice 4.9 adds end-to-end and failure-path tests covering:
 - [ ] Is every number in section 11 consistent with my real quota?
 - [ ] Is there any path by which text from a draft or guideline can influence what the engine does, other than through the validator?
 - [ ] Is anything here a Round 3 feature that I would be tempted to build in Round 2?
+
+
+## 17. Improvement 2 implementation note (11 Nov 2026)
+
+The original Round 3 hook for confidentiality has been implemented as an isolated improvement on top of the merged Visual Brand Compliance baseline.
+
+- POST /v1/reviews/preview builds the exact redacted text and vision provider requests without contacting an AI provider.
+- POST /v1/reviews/confirm requires a single-use token and revalidates revision, kit, policy and asset fingerprints before creating a review.
+- The review pipeline consumes the frozen provider requests from the preview record. It does not reconstruct prompts after approval.
+- The reverse placeholder map is encrypted with PREVIEW_ENCRYPTION_KEY; raw source values and image bytes are not stored in the preview record. The encrypted map and frozen payload are cleared after terminal processing.
+- Audit events retain counts, categories, policy version, asset count and payload hash only.
+- Images are not OCR-redacted. When a vision-provider request will include stored image bytes, the preview discloses this and confirmation requires explicit consent.
+- The legacy POST /v1/reviews direct-start route returns 409 preview_required and cannot bypass consent.
+
+The migration is staged at supabase/migrations/20261111164322_add_review_previews.sql; it has not been applied to a Supabase project. Configure the same private Fernet key on all engine instances before enabling this workflow.

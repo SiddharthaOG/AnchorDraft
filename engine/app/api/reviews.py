@@ -1,15 +1,14 @@
 """Reviews API endpoints."""
-import hashlib
+import hmac
+import json
 import time
-import uuid
+from datetime import datetime, timezone
 from collections import defaultdict
 from uuid import UUID
-from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, status, HTTPException
 
 from app.auth.dependencies import (
     AuthUser,
-    get_current_user_single_org,
     get_request_id,
     require_creator,
 )
@@ -19,19 +18,27 @@ from app.core.errors import (
     ConflictError,
     NotFoundError,
     RateLimitedError,
-    map_db_exception,
 )
 from app.models.api import (
     ReviewStartRequest,
     ReviewStartResponse,
-    ReviewStatus,
-    LLMStatus,
+    ReviewPreviewRequest,
+    ReviewPreviewResponse,
+    ReviewConfirmRequest,
     DAILY_REVIEW_CAP,
-    DBErrorCodes,
-    ErrorCode,
 )
 from app.store.db import get_db_pool
 from app.pipeline import run_review_pipeline
+from app.confidentiality.preview import (
+    PreviewConfigurationError,
+    build_review_preview,
+    sha256_text,
+    sha256_json,
+    decode_jsonb,
+    confidentiality_policy_sha256,
+)
+from app.confidentiality import ConfidentialityPolicyStore
+from app.pipeline.orchestrator import SupabaseDataLoader
 
 router = APIRouter()
 
@@ -56,19 +63,225 @@ def _check_user_rate_limit(user_id: str, limit: int, window_seconds: int) -> tup
     return True, 0
 
 
+
 @router.post(
-    "/reviews",
+    "/reviews/preview",
+    response_model=ReviewPreviewResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_review_preview(
+    payload: ReviewPreviewRequest,
+    response: Response,
+    user: AuthUser = Depends(require_creator),
+) -> ReviewPreviewResponse:
+    """Prepare the exact redacted provider prompts; no provider is called here."""
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    pool = await get_db_pool()
+    try:
+        result = await build_review_preview(payload.revision_id, user.user_id, user.org_id, pool)
+        return ReviewPreviewResponse(**result)
+    except PreviewConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise NotFoundError(str(exc)) from exc
+    except ValueError as exc:
+        raise ConflictError("preview_not_available", str(exc)) from exc
+
+
+@router.post(
+    "/reviews/confirm",
     response_model=ReviewStartResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    responses={
-        200: {"description": "Review deduplicated, existing review returned"},
-        202: {"description": "New review created"},
-        401: {"description": "Unauthenticated"},
-        403: {"description": "Forbidden - not a creator"},
-        404: {"description": "Revision not found or not accessible"},
-        409: {"description": "Conflict - not latest revision, not editable, no active kit, etc."},
-        429: {"description": "Daily review cap reached"},
-    },
+)
+async def confirm_review_preview(
+    payload: ReviewConfirmRequest,
+    background_tasks: BackgroundTasks,
+    response: Response,
+    user: AuthUser = Depends(require_creator),
+) -> ReviewStartResponse:
+    """Atomically consume a preview and enqueue exactly one review."""
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    pool = await get_db_pool()
+    supabase = get_supabase_client()
+    token_hash = sha256_text(payload.confirmation_token)
+
+    async with pool.pool.acquire() as conn:
+        async with conn.transaction():
+            preview = await conn.fetchrow(
+                """
+                SELECT * FROM review_previews
+                WHERE id=$1
+                FOR UPDATE
+                """,
+                payload.preview_id,
+            )
+            if (
+                not preview
+                or str(preview["org_id"]) != user.org_id
+                or str(preview["user_id"]) != user.user_id
+            ):
+                raise NotFoundError("Review preview not found")
+            if not hmac.compare_digest(str(preview["confirmation_token_sha256"]), token_hash):
+                raise HTTPException(status_code=403, detail="Invalid preview confirmation token")
+            if preview["consumed_at"] is not None:
+                raise ConflictError("preview_already_consumed", "This preview has already been confirmed")
+            if preview["expires_at"] <= datetime.now(timezone.utc):
+                raise ConflictError("preview_expired", "This preview has expired; create a new preview")
+            preview_payload = decode_jsonb(preview["payload"], {})
+            if not isinstance(preview_payload, dict) or preview["payload_sha256"] != sha256_json(preview_payload):
+                raise ConflictError("preview_integrity_failed", "Preview payload integrity check failed")
+            assets = decode_jsonb(preview["asset_manifest"], [])
+            if assets != (preview_payload.get("asset_manifest") or []):
+                raise ConflictError("preview_integrity_failed", "Preview asset manifest integrity check failed")
+            from app.confidentiality.preview import decrypt_reverse_map
+            try:
+                decrypt_reverse_map(preview["reverse_map_ciphertext"])
+            except PreviewConfigurationError as exc:
+                raise HTTPException(status_code=503, detail="Preview encryption is unavailable") from exc
+            needs_image_consent = preview_payload.get("vision_provider_request") is not None
+            if needs_image_consent and not payload.consent_to_send_original_images:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Explicit consent is required to send attached image bytes in their stored form to the vision provider",
+                )
+            if not needs_image_consent and payload.consent_to_send_original_images:
+                raise HTTPException(status_code=400, detail="This preview will not send images to an AI provider")
+
+            revision = await __import__("asyncio").to_thread(
+                supabase.get_revision, str(preview["revision_id"])
+            )
+            if not revision:
+                raise NotFoundError("Revision not found")
+            content = await __import__("asyncio").to_thread(
+                supabase.get_content, str(revision["content_id"])
+            )
+            if (
+                not content
+                or str(content.get("org_id")) != user.org_id
+                or content.get("status") not in {"draft", "changes_requested"}
+            ):
+                raise ConflictError("revision_not_editable", "The revision is no longer eligible for review")
+            if sha256_text(str(revision.get("body") or "")) != preview["revision_sha256"]:
+                raise ConflictError("revision_changed", "The revision changed after preview; create a new preview")
+
+            latest = await conn.fetchrow(
+                "SELECT id FROM revisions WHERE content_id=$1 ORDER BY version DESC LIMIT 1",
+                content["id"],
+            )
+            if not latest or str(latest["id"]) != str(preview["revision_id"]):
+                raise ConflictError("not_latest_revision", "Only the latest revision can be reviewed")
+
+            kit = await __import__("asyncio").to_thread(supabase.get_active_kit, user.org_id)
+            if not kit or str(kit["id"]) != str(preview["kit_id"]):
+                raise ConflictError("active_kit_changed", "The active brand kit changed after preview")
+
+            loader = SupabaseDataLoader()
+            rules, facts = await __import__("asyncio").to_thread(
+                loader.load_rules_and_facts, str(kit["id"])
+            )
+            kit_fingerprint = {
+                "kit_id": str(kit["id"]),
+                "version": kit.get("version"),
+                "rules": [__import__("dataclasses").asdict(item) for item in rules],
+                "facts": [__import__("dataclasses").asdict(item) for item in facts],
+                "visual_guidelines": kit.get("visual_guidelines") or {},
+            }
+            if sha256_json(kit_fingerprint) != preview["kit_sha256"]:
+                raise ConflictError("kit_changed", "The brand kit changed after preview; create a new preview")
+
+            policy = await ConfidentialityPolicyStore(supabase).load_policy(user.org_id)
+            if (
+                policy.version != preview["policy_version"]
+                or confidentiality_policy_sha256(policy) != preview["policy_sha256"]
+            ):
+                raise ConflictError("policy_changed", "Confidentiality policy changed after preview")
+
+            # Re-query revision associations and checksums immediately before consumption.
+            import asyncio
+            current_rows = await asyncio.to_thread(
+                lambda: supabase._get_client().rpc(
+                    "get_visual_assets_for_revision",
+                    {"_revision_id": str(preview["revision_id"]), "_org_id": user.org_id},
+                ).execute().data or []
+            )
+            current_ids = {str(item.get("id")) for item in current_rows}
+            if current_ids != {str(item["id"]) for item in assets}:
+                raise ConflictError("assets_changed", "Attached images changed after preview")
+            for item in assets:
+                current_asset = await asyncio.to_thread(
+                    supabase.get_visual_asset, str(item["id"]), user.org_id
+                )
+                if not current_asset or str(current_asset.get("checksum")) != str(item["checksum"]):
+                    raise ConflictError("asset_changed", "An attached image changed after preview")
+
+            review_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM reviews WHERE org_id=$1 AND created_at >= CURRENT_DATE",
+                user.org_id,
+            )
+            if review_count and review_count >= DAILY_REVIEW_CAP:
+                raise RateLimitedError(
+                    f"Daily review cap ({DAILY_REVIEW_CAP}) reached",
+                    retry_after_seconds=86400,
+                )
+            allowed, retry_after = _check_user_rate_limit(
+                user.user_id, get_settings().PER_USER_RATE_LIMIT, 60
+            )
+            if not allowed:
+                raise RateLimitedError(
+                    "Per-user review rate limit exceeded",
+                    retry_after_seconds=retry_after,
+                )
+
+            review = await conn.fetchrow(
+                """
+                INSERT INTO reviews (org_id, revision_id, kit_id, engine_version, requested_by, preview_id)
+                VALUES ($1,$2,$3,$4,$5,$6)
+                RETURNING id, status, kit_id
+                """,
+                user.org_id, preview["revision_id"], preview["kit_id"],
+                get_settings().ENGINE_VERSION, user.user_id, preview["id"],
+            )
+            await conn.execute(
+                """
+                UPDATE review_previews
+                SET consumed_at=now(), confirmed_by=$2, image_consent_at=$3, review_id=$4
+                WHERE id=$1 AND consumed_at IS NULL
+                """,
+                preview["id"], user.user_id,
+                datetime.now(timezone.utc) if needs_image_consent else None,
+                review["id"],
+            )
+            await conn.execute(
+                """
+                INSERT INTO audit_log (org_id, actor_id, action, entity_type, entity_id, detail)
+                VALUES ($1,$2,'review.preview_confirmed','review',$3,$4::jsonb)
+                """,
+                user.org_id, user.user_id, review["id"],
+                json.dumps({
+                    "preview_id": str(preview["id"]),
+                    "payload_sha256": preview["payload_sha256"],
+                    "policy_version": preview["policy_version"],
+                    "asset_count": len(assets),
+                    "original_images_consent": needs_image_consent,
+                    "redaction_count": decode_jsonb(preview["redaction_summary"], {}).get("total_matches", 0),
+                }),
+            )
+
+    background_tasks.add_task(run_review_pipeline, str(review["id"]))
+    return ReviewStartResponse(
+        review_id=UUID(str(review["id"])),
+        status=str(review["status"]),
+        deduplicated=False,
+        kit_id=UUID(str(review["kit_id"])),
+        kit_version=kit["version"],
+    )
+
+
+@router.post(
+    "/reviews",
+    status_code=status.HTTP_409_CONFLICT,
 )
 async def start_review(
     background_tasks: BackgroundTasks,
@@ -76,199 +289,12 @@ async def start_review(
     payload: ReviewStartRequest,
     user: AuthUser = Depends(require_creator),
     request_id: str = Depends(get_request_id),
-) -> ReviewStartResponse | JSONResponse:
-    """Start a review for a revision.
-
-    Idempotent: returns existing review if one is queued, running, or completed successfully.
-    """
-    settings = get_settings()
-    revision_id = payload.revision_id
-    pool = await get_db_pool()
-    supabase = get_supabase_client()
-
-    # 1. Verify revision exists and get its content (via Supabase - read only)
-    revision = supabase.get_revision(str(revision_id))
-    if not revision:
-        raise NotFoundError("Revision not found")
-
-    # 2. Verify user's org matches revision's org (via content)
-    content = supabase.get_content(revision["content_id"])
-    if not content:
-        raise NotFoundError("Content not found")
-
-    if content["org_id"] != user.org_id:
-        # Don't leak existence - return 404
-        raise NotFoundError("Revision not found")
-
-    # 3. Check content status is editable (draft or changes_requested)
-    content_status = content["status"]
-    if content_status not in ("draft", "changes_requested"):
-        raise ConflictError("not_editable", "Content is not editable")
-
-    # 4. Check revision is the latest revision of its content
-    async with pool.pool.acquire() as conn:
-        latest_revision = await conn.fetchrow(
-            """
-            SELECT id FROM revisions
-            WHERE content_id = $1
-            ORDER BY version DESC
-            LIMIT 1
-            """,
-            content["id"],
-        )
-
-    if not latest_revision or latest_revision["id"] != str(revision_id):
-        raise ConflictError("not_latest_revision", "Only the latest revision can be reviewed")
-
-    # 5. Get active kit for the organization
-    kit = supabase.get_active_kit(user.org_id)
-    if not kit:
-        raise ConflictError("no_active_kit", "Organization has no active brand kit")
-
-    # 6. Idempotency check and daily cap check - all in one transaction with two advisory locks
-    # Lock acquisition order: revision lock first, then org/day lock (consistent order to avoid deadlocks)
-    # Use signed 64-bit for single-arg advisory lock, signed 32-bit for two-arg lock
-    revision_lock_id = int.from_bytes(
-        hashlib.md5(str(revision_id).encode()).digest()[:8],
-        "big",
-        signed=True,
+) -> None:
+    """Legacy direct-start endpoint: callers must use preview and confirmation."""
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "preview_required",
+            "message": "Create a review preview and confirm it before starting a review.",
+        },
     )
-
-    # Org/day lock: use org_id hash and day number since epoch (both fit in signed 32-bit)
-    from datetime import date, timezone
-    org_hash = int.from_bytes(hashlib.md5(str(user.org_id).encode()).digest()[:4], "big", signed=True)
-
-    async with pool.pool.acquire() as conn:
-        async with conn.transaction():
-            # 1. Acquire revision-level advisory lock (for idempotency)
-            await conn.execute("SELECT pg_advisory_xact_lock($1)", revision_lock_id)
-
-            # 2. Look up existing queued/running review
-            existing_queued = await conn.fetchrow(
-                """
-                SELECT id, status, kit_id, claim_token, started_at FROM reviews
-                WHERE revision_id = $1
-                  AND status IN ('queued', 'running')
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                revision_id,
-            )
-            if existing_queued:
-                # If the review was previously running (reclaimed), schedule it again
-                is_reclaimed = existing_queued["status"] == "queued" and existing_queued["claim_token"] is None and existing_queued["started_at"] is not None
-                if is_reclaimed:
-                    # Schedule the pipeline for the reclaimed review
-                    background_tasks.add_task(run_review_pipeline, str(existing_queued["id"]))
-                    # Update status to running and generate new claim_token
-                    claim_token = uuid.uuid4()
-                    await conn.execute(
-                        """
-                        UPDATE reviews
-                        SET status = 'running', started_at = now(), claim_token = $1, claimed_at = now()
-                        WHERE id = $2
-                        """,
-                        claim_token,
-                        existing_queued["id"],
-                    )
-                    return ReviewStartResponse(
-                        review_id=UUID(existing_queued["id"]),
-                        status="running",
-                        deduplicated=False,  # Not deduplicated - we're re-running
-                        kit_id=UUID(existing_queued["kit_id"]),
-                        kit_version=kit["version"],
-                    )
-                return ReviewStartResponse(
-                    review_id=UUID(existing_queued["id"]),
-                    status=existing_queued["status"],
-                    deduplicated=True,
-                    kit_id=UUID(existing_queued["kit_id"]),
-                    kit_version=kit["version"],
-                )
-
-            # 3. Look up existing completed review with llm_status IN ('ok', 'skipped')
-            existing_completed = await conn.fetchrow(
-                """
-                SELECT id, status, kit_id FROM reviews
-                WHERE revision_id = $1
-                  AND status = 'done'
-                  AND llm_status IN ('ok', 'skipped')
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                revision_id,
-            )
-            if existing_completed:
-                return ReviewStartResponse(
-                    review_id=UUID(existing_completed["id"]),
-                    status=existing_completed["status"],
-                    deduplicated=True,
-                    kit_id=UUID(existing_completed["kit_id"]),
-                    kit_version=kit["version"],
-                )
-
-            # 4. Obtain PostgreSQL's current date for the org/day lock
-            db_date = await conn.fetchval("SELECT CURRENT_DATE")
-            epoch_day = (db_date - date(1970, 1, 1)).days
-            org_hash = int.from_bytes(hashlib.md5(str(user.org_id).encode()).digest()[:4], "big", signed=True)
-            day_hash = epoch_day & 0x7FFFFFFF  # fit in signed 32-bit
-
-            # 4. Acquire organization/day-level advisory lock (for daily cap serialization)
-            # Use two-int advisory lock: (org_hash, day_hash) - both signed 32-bit
-            await conn.execute("SELECT pg_advisory_xact_lock($1, $2)", org_hash, day_hash)
-
-            # 5. Check daily review cap (uses PostgreSQL's CURRENT_DATE)
-            review_count = await conn.fetchval(
-                """
-                SELECT COUNT(*) FROM reviews
-                WHERE org_id = $1
-                  AND created_at >= CURRENT_DATE
-                """,
-                user.org_id,
-            )
-
-            if review_count and review_count >= DAILY_REVIEW_CAP:
-                raise RateLimitedError(
-                    f"Daily review cap ({DAILY_REVIEW_CAP}) reached",
-                    retry_after_seconds=86400,  # 24 hours
-                )
-
-            # 6. Check per-user rate limit
-            allowed, retry_after = _check_user_rate_limit(
-                user.user_id,
-                settings.PER_USER_RATE_LIMIT,
-                60,  # 1 minute window
-            )
-            if not allowed:
-                raise RateLimitedError(
-                    f"Per-user rate limit ({settings.PER_USER_RATE_LIMIT} requests per minute) exceeded",
-                    retry_after_seconds=retry_after,
-                )
-
-            # 6. Insert new queued review
-            review = await conn.fetchrow(
-                """
-                INSERT INTO reviews (org_id, revision_id, kit_id, engine_version, requested_by)
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING id, status, kit_id
-                """,
-                user.org_id,
-                str(revision_id),
-                str(kit["id"]),
-                settings.ENGINE_VERSION,
-                user.user_id,
-            )
-
-            if not review:
-                raise RuntimeError("Failed to create review")
-
-            # Schedule the pipeline as a background task
-            background_tasks.add_task(run_review_pipeline, str(review["id"]))
-
-            return ReviewStartResponse(
-                review_id=UUID(review["id"]),
-                status=review["status"],
-                deduplicated=False,
-                kit_id=UUID(review["kit_id"]),
-                kit_version=kit["version"],
-            )

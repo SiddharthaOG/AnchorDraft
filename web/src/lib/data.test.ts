@@ -9,10 +9,11 @@ const createMockChain = () => {
   const order = vi.fn().mockReturnThis();
   const limit = vi.fn().mockReturnThis();
   const single = vi.fn().mockResolvedValue({ data: null, error: null });
+  const maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
   const insert = vi.fn().mockReturnThis();
   const update = vi.fn().mockReturnThis();
   const del = vi.fn().mockReturnThis();
-  return { select, eq, order, limit, single, insert, update, delete: del };
+  return { select, eq, order, limit, single, maybeSingle, insert, update, delete: del };
 };
 
 // Mock the Supabase client module using vi.mock with factory
@@ -69,7 +70,9 @@ const {
   cloneKit,
   activateKit,
   lintKit,
-  startReview,
+  createReviewPreview,
+  confirmReviewPreview,
+  uploadVisualAsset,
   createRule,
   updateRule,
   deleteRule,
@@ -94,6 +97,57 @@ describe('Data Access Layer', () => {
 
   afterEach(() => {
     // Reset if needed
+  });
+
+  describe('Content revision queries', () => {
+    it('loads the latest revision from the base table with the canonical id field', async () => {
+      const revision = {
+        id: 'revision-2',
+        org_id: 'org-1',
+        content_id: 'content-1',
+        version: 2,
+        parent_revision_id: 'revision-1',
+        body: 'Latest body',
+        source: 'manual',
+        created_by: 'user-1',
+        created_at: '2026-11-12T10:00:00Z',
+      };
+      const mockChain = createMockChain();
+      mockChain.single.mockResolvedValueOnce({ data: revision, error: null });
+      mockFrom.mockReturnValueOnce(mockChain);
+
+      const result = await getLatestRevision('content-1');
+
+      expect(mockFrom).toHaveBeenCalledWith('revisions');
+      expect(mockChain.select).toHaveBeenCalledWith('*');
+      expect(mockChain.eq).toHaveBeenCalledWith('content_id', 'content-1');
+      expect(mockChain.order).toHaveBeenCalledWith('version', { ascending: false });
+      expect(mockChain.limit).toHaveBeenCalledWith(1);
+      expect(result).toEqual(revision);
+      expect(result?.id).toBe('revision-2');
+    });
+
+    it('returns null when content has no revisions', async () => {
+      const mockChain = createMockChain();
+      mockChain.single.mockResolvedValueOnce({ data: null, error: { code: 'PGRST116', message: 'No rows' } });
+      mockFrom.mockReturnValueOnce(mockChain);
+
+      await expect(getLatestRevision('content-empty')).resolves.toBeNull();
+    });
+  });
+
+  describe('Review lookup queries', () => {
+    it('uses maybeSingle for revisions that do not have a review yet', async () => {
+      const mockChain = createMockChain();
+      mockChain.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+      mockFrom.mockReturnValueOnce(mockChain);
+
+      await expect(getLatestReviewForRevision('revision-1')).resolves.toBeNull();
+      expect(mockFrom).toHaveBeenCalledWith('reviews');
+      expect(mockChain.eq).toHaveBeenCalledWith('revision_id', 'revision-1');
+      expect(mockChain.maybeSingle).toHaveBeenCalledOnce();
+      expect(mockChain.single).not.toHaveBeenCalled();
+    });
   });
 
   describe('RPC function wrappers', () => {
@@ -124,6 +178,32 @@ describe('Data Access Layer', () => {
         _body: 'Updated body',
       });
       expect(result).toEqual(mockResult);
+    });
+
+    it('createRevision reports an unchanged body as a duplicate entry', async () => {
+      mockRpc.mockResolvedValueOnce({
+        data: null,
+        error: {
+          code: '23505',
+          message: 'duplicate_revision',
+          details: 'The submitted body is identical to the latest revision.',
+        },
+      });
+
+      await expect(createRevision('content-1', 'Unchanged body')).rejects.toThrow(
+        'Duplicate entry: this content is identical to the latest revision. Make a change before creating a new revision.',
+      );
+    });
+
+    it('createRevision keeps malformed body errors distinct from duplicates', async () => {
+      mockRpc.mockResolvedValueOnce({
+        data: null,
+        error: { code: 'P0001', message: 'validation:body' },
+      });
+
+      await expect(createRevision('content-1', '')).rejects.toThrow(
+        'Revision content must be between 1 and 20,000 characters.',
+      );
     });
 
     it('recordDecision calls record_decision RPC with correct args', async () => {
@@ -919,8 +999,27 @@ describe('Mutation/Lint Race Protection Logic', () => {
   });
 });
 
-describe('startReview', () => {
-  const mockStartReviewResponse = {
+describe('review preview and confirmation API', () => {
+  const previewResponse = {
+    preview_id: 'preview-1',
+    revision_id: 'revision-1',
+    confirmation_token: 'one-time-token',
+    expires_at: '2026-11-11T12:10:00Z',
+    redacted_draft: 'Contact [EMAIL-12345678]',
+    text_provider_preview: { system_instruction: 'system', user_content: 'redacted prompt' },
+    vision_provider_preview: null,
+    assets: [],
+    image_consent_required: false,
+    redaction_summary: {
+      total_matches: 1,
+      by_type: { EMAIL: 1 },
+      original_chars: 30,
+      redacted_chars: 25,
+      policy_version: 1,
+    },
+    payload_sha256: 'a'.repeat(64),
+  };
+  const confirmResponse = {
     review_id: 'review-1',
     status: 'queued' as const,
     deduplicated: false,
@@ -932,190 +1031,187 @@ describe('startReview', () => {
     mockAuthGetSession.mockResolvedValue({ data: { session: { access_token: 'test-token' } }, error: null });
   });
 
-  it('calls start review endpoint with auth token and returns parsed response', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => mockStartReviewResponse,
-    });
-
-    const result = await startReview('revision-1');
+  it('creates a preview with the authenticated, no-store request', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => previewResponse });
+    const result = await createReviewPreview('revision-1');
 
     expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining('/v1/reviews'),
+      expect.stringContaining('/v1/reviews/preview'),
       expect.objectContaining({
         method: 'POST',
-        headers: expect.objectContaining({
-          Authorization: 'Bearer test-token',
-          'Content-Type': 'application/json',
-        }),
+        cache: 'no-store',
+        headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
         body: JSON.stringify({ revision_id: 'revision-1' }),
-      })
-    );
-    expect(result).toEqual(mockStartReviewResponse);
-  });
-
-  it('throws ReviewEngineError on 401', async () => {
-    mockAuthGetSession.mockResolvedValueOnce({
-      data: { session: null },
-      error: null,
-    });
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 401 });
-  });
-
-  it('preserves FastAPI nested authentication errors on 401', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 401,
-      statusText: 'Unauthorized',
-      json: async () => ({
-        detail: {
-          error: {
-            code: 'unauthenticated',
-            message: 'Invalid token: Signature verification failed',
-          },
-        },
       }),
-    });
+    );
+    expect(result).toEqual(previewResponse);
+  });
 
-    await expect(startReview('revision-1')).rejects.toMatchObject({
+  it('confirms a preview with explicit image consent', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => confirmResponse });
+    const result = await confirmReviewPreview('preview-1', 'one-time-token', true);
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/v1/reviews/confirm'),
+      expect.objectContaining({
+        method: 'POST',
+        cache: 'no-store',
+        body: JSON.stringify({
+          preview_id: 'preview-1',
+          confirmation_token: 'one-time-token',
+          consent_to_send_original_images: true,
+        }),
+      }),
+    );
+    expect(result).toEqual(confirmResponse);
+  });
+
+  it('rejects when there is no authenticated session', async () => {
+    mockAuthGetSession.mockResolvedValueOnce({ data: { session: null }, error: null });
+    await expect(createReviewPreview('revision-1')).rejects.toMatchObject({
       name: 'ReviewEngineError',
       status: 401,
-      message: 'Invalid token: Signature verification failed',
     });
   });
 
-  it('throws ReviewEngineError on 403', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 403,
-      json: async () => ({ error: { message: 'Forbidden' } }),
-    });
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 403 });
-  });
-
-  it('throws ReviewEngineError on 404', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 404,
-      json: async () => ({ error: { message: 'Revision not found' } }),
-    });
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 404 });
-  });
-
-  it('throws ReviewEngineError on 409 conflict', async () => {
+  it('preserves structured preview errors and machine-readable reason codes', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 409,
-      json: async () => ({ error: { message: 'Content is not editable', reason: 'not_editable' } }),
+      statusText: 'Conflict',
+      json: async () => ({ detail: { code: 'preview_expired', message: 'Preview expired' } }),
     });
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 409, reason: 'not_editable' });
+    await expect(confirmReviewPreview('preview-1', 'token', false)).rejects.toMatchObject({
+      name: 'ReviewEngineError',
+      status: 409,
+      message: 'Preview expired',
+      reason: 'preview_expired',
+    });
   });
 
-  it('throws ReviewEngineError on 429 rate limited', async () => {
+  it('parses FastAPI request-validation arrays instead of hiding the cause behind a generic 422', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
-      status: 429,
-      json: async () => ({ error: { message: 'Daily review cap reached', retry_after_seconds: 3600 } }),
+      status: 422,
+      statusText: 'Unprocessable Entity',
+      json: async () => ({ detail: [{ loc: ['body', 'revision_id'], msg: 'Input should be a valid UUID', type: 'uuid_parsing' }] }),
     });
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 429, retryAfterSeconds: 3600 });
+    await expect(createReviewPreview('not-a-uuid')).rejects.toMatchObject({
+      status: 422,
+      reason: 'request_validation_error',
+      message: 'Request validation failed: body.revision_id: Input should be a valid UUID',
+    });
   });
 
-  it('throws ReviewEngineError on network error', async () => {
+  it('parses plain FastAPI detail strings', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      json: async () => ({ detail: 'Explicit consent is required' }),
+    });
+    await expect(confirmReviewPreview('preview-1', 'token', false)).rejects.toMatchObject({
+      status: 400,
+      message: 'Explicit consent is required',
+    });
+  });
+
+  it('converts network errors into ReviewEngineError', async () => {
     mockFetch.mockRejectedValueOnce(new Error('Network error'));
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 0 });
-  });
-
-  it('throws ReviewEngineError on timeout', async () => {
-    const abortError = new DOMException('Aborted', 'AbortError');
-    mockFetch.mockRejectedValueOnce(abortError);
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 504 });
-  });
-
-  it('throws ReviewEngineError on invalid response shape', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ invalid: 'shape' }),
+    await expect(createReviewPreview('revision-1')).rejects.toMatchObject({
+      name: 'ReviewEngineError',
+      status: 0,
     });
-
-    let caughtError: unknown;
-    try {
-      await startReview('revision-1');
-    } catch (e) {
-      caughtError = e;
-    }
-    expect(caughtError).toBeInstanceOf(ReviewEngineError);
-    expect(caughtError).toMatchObject({ status: 500 });
   });
 
-  it('handles deduplicated response', async () => {
-    const deduplicatedResponse = {
-      ...mockStartReviewResponse,
-      deduplicated: true,
-      status: 'done' as const,
-    };
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => deduplicatedResponse,
+  it('converts aborts into timeout errors', async () => {
+    mockFetch.mockRejectedValueOnce(new DOMException('Aborted', 'AbortError'));
+    await expect(createReviewPreview('revision-1')).rejects.toMatchObject({
+      name: 'ReviewEngineError',
+      status: 504,
     });
+  });
 
-    const result = await startReview('revision-1');
-    expect(result).toEqual(deduplicatedResponse);
+  it('rejects malformed preview responses', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ preview_id: 'bad' }) });
+    await expect(createReviewPreview('revision-1')).rejects.toMatchObject({
+      name: 'ReviewEngineError',
+      status: 500,
+    });
+  });
+});
+
+describe('visual asset upload API', () => {
+  const uploadResponse = {
+    asset_id: 'asset-visual-1',
+    width: 640,
+    height: 480,
+    mime_type: 'image/png' as const,
+    checksum: 'c'.repeat(64),
+    signed_url: 'https://storage.example/asset-visual-1.png',
+    expires_in: 3600,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch.mockReset();
+    mockAuthGetSession.mockResolvedValue({ data: { session: { access_token: 'test-token' } }, error: null });
+  });
+
+  it('posts a signature-verified PNG as multipart data with revision association', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => uploadResponse });
+    const png = new File([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'brand.png', { type: 'image/png' });
+
+    const result = await uploadVisualAsset(png, 'content-1', 'revision-1');
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/v1/imports/visual'),
+      expect.objectContaining({
+        method: 'POST',
+        cache: 'no-store',
+        headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
+      }),
+    );
+    const request = mockFetch.mock.calls[0][1] as RequestInit;
+    expect(request.body).toBeInstanceOf(FormData);
+    const body = request.body as FormData;
+    expect(body.get('content_id')).toBe('content-1');
+    expect(body.get('revision_id')).toBe('revision-1');
+    expect((body.get('file') as Blob).type).toBe('image/png');
+    expect(request.headers).not.toHaveProperty('Content-Type');
+    expect(result).toEqual(uploadResponse);
+  });
+
+  it('accepts JPEG and WebP signatures even when the browser omits File.type', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ ...uploadResponse, mime_type: 'image/jpeg' }) });
+    const jpeg = new File([Uint8Array.from([0xff, 0xd8, 0xff, 0x00])], 'photo.jpg');
+    await uploadVisualAsset(jpeg, 'content-1', 'revision-1');
+    const jpegRequest = mockFetch.mock.calls[0][1] as RequestInit;
+    expect(((jpegRequest.body as FormData).get('file') as Blob).type).toBe('image/jpeg');
+
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ ...uploadResponse, mime_type: 'image/webp' }) });
+    const webp = new File([Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50])], 'graphic.webp');
+    await uploadVisualAsset(webp, 'content-1', 'revision-1');
+    const webpRequest = mockFetch.mock.calls[1][1] as RequestInit;
+    expect(((webpRequest.body as FormData).get('file') as Blob).type).toBe('image/webp');
+  });
+
+  it('rejects unsupported formats based on file signature before making a request', async () => {
+    const gif = new File([Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61])], 'animation.gif', { type: 'image/gif' });
+    await expect(uploadVisualAsset(gif, 'content-1', 'revision-1')).rejects.toMatchObject({
+      status: 415,
+      message: 'Unsupported image. Choose a PNG, JPG/JPEG, or WebP file.',
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects images above the 10 MB backend limit before making a request', async () => {
+    const oversized = new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'large.png', { type: 'image/png' });
+    await expect(uploadVisualAsset(oversized, 'content-1', 'revision-1')).rejects.toMatchObject({
+      status: 413,
+      message: 'Each image must be 10 MB or smaller.',
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 

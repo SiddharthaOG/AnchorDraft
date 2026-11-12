@@ -270,7 +270,7 @@ def create_fallback_provider(settings: Optional[ProviderSettings] = None) -> Opt
     except Exception as e:
         logger.warning(
             "fallback_provider_creation_failed",
-            extra={"fallback_provider": settings.fallback_provider.value, "error": str(e)},
+            extra={"fallback_provider": settings.fallback_provider.value, "error_type": type(e).__name__},
         )
         return None
 
@@ -422,7 +422,7 @@ class ProviderWithFallback:
             f"Fallback ({fallback_model}): {fallback_cat}."
         )
 
-    def _check_deadline(self, deadline: float, context: str) -> int:
+    def _check_deadline(self, deadline: float, context: str) -> float:
         """Check remaining time before deadline.
 
         Args:
@@ -430,7 +430,7 @@ class ProviderWithFallback:
             context: Context string for error message.
 
         Returns:
-            Remaining time in seconds (rounded down).
+            Precise remaining time in seconds; request timeout fields are clamped separately.
 
         Raises:
             TimeoutError: If deadline has expired.
@@ -438,9 +438,15 @@ class ProviderWithFallback:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"Overall deadline exceeded during {context}")
-        return int(remaining)
+        return remaining
 
-    async def generate_findings(self, request: "ProviderRequest") -> "ProviderResult":
+    async def _invoke_provider(self, provider, request: "ProviderRequest", images=None):
+        """Invoke text or vision adapters without changing the approved request."""
+        if images is None:
+            return await provider.generate_findings(request)
+        return await provider.generate_findings(request, images)
+
+    async def generate_findings(self, request: "ProviderRequest", images=None) -> "ProviderResult":
         """Generate findings with fallback support and single overall deadline.
 
         The total operation (primary attempt + primary retry + fallback attempt + fallback retry)
@@ -468,10 +474,10 @@ class ProviderWithFallback:
                 output_schema=request.output_schema,
                 randomness=request.randomness,
                 output_limit=request.output_limit,
-                timeout_seconds=min(request.timeout_seconds, remaining),
+                timeout_seconds=max(1, min(request.timeout_seconds, int(remaining))),
             )
             result = await asyncio.wait_for(
-                self._primary.generate_findings(primary_request),
+                self._invoke_provider(self._primary, primary_request, images),
                 timeout=remaining,
             )
             logger.info(
@@ -518,10 +524,10 @@ class ProviderWithFallback:
                         output_schema=request.output_schema,
                         randomness=request.randomness,
                         output_limit=request.output_limit,
-                        timeout_seconds=min(request.timeout_seconds, remaining),
+                        timeout_seconds=max(1, min(request.timeout_seconds, int(remaining))),
                     )
                     result = await asyncio.wait_for(
-                        self._fallback.generate_findings(fallback_request),
+                        self._invoke_provider(self._fallback, fallback_request, images),
                         timeout=remaining,
                     )
                     logger.info(
@@ -605,10 +611,10 @@ class ProviderWithFallback:
                         output_schema=request.output_schema,
                         randomness=request.randomness,
                         output_limit=request.output_limit,
-                        timeout_seconds=min(request.timeout_seconds, remaining),
+                        timeout_seconds=max(1, min(request.timeout_seconds, int(remaining))),
                     )
                     result = await asyncio.wait_for(
-                        self._fallback.generate_findings(fallback_request),
+                        self._invoke_provider(self._fallback, fallback_request, images),
                         timeout=remaining,
                     )
                     logger.info(
@@ -653,6 +659,91 @@ class ProviderWithFallback:
 
             # No fallback available or error not retryable
             raise
+
+
+def create_vision_provider(settings: Optional[ProviderSettings] = None):
+    """Create a vision-capable primary adapter using the shared provider settings."""
+    if settings is None:
+        settings = load_provider_settings()
+
+    from app.visual.vision_providers import (
+        FakeVisionProvider, GeminiVisionProvider, GroqVisionProvider,
+    )
+    if settings.provider_type == ProviderType.FAKE:
+        from app.core.config import get_settings as _get_settings
+        if _get_settings().requires_real_provider:
+            raise ProviderConfigError("Fake vision provider is not allowed in a non-local environment")
+        return FakeVisionProvider()
+    if settings.provider_type == ProviderType.GROQ:
+        if not settings.groq_api_key:
+            raise ProviderConfigError("GROQ_API_KEY is required for Groq vision provider")
+        return GroqVisionProvider(
+            api_key=settings.groq_api_key,
+            tpm_limit=settings.groq_tpm_limit,
+            rpm_limit=settings.groq_rpm_limit,
+        )
+    if settings.provider_type == ProviderType.GEMINI:
+        if not settings.gemini_api_key:
+            raise ProviderConfigError("GEMINI_API_KEY is required for Gemini vision provider")
+        return GeminiVisionProvider(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_model,
+            tpm_limit=settings.gemini_tpm_limit,
+            rpm_limit=settings.gemini_rpm_limit,
+        )
+    raise ProviderConfigError(f"Unknown vision provider type: {settings.provider_type}")
+
+
+def create_fallback_vision_provider(settings: Optional[ProviderSettings] = None):
+    """Create the configured vision fallback, if enabled and distinct."""
+    if settings is None:
+        settings = load_provider_settings()
+    if not settings.fallback_enabled or settings.fallback_provider == settings.provider_type:
+        return None
+
+    from app.visual.vision_providers import (
+        FakeVisionProvider, GeminiVisionProvider, GroqVisionProvider,
+    )
+    try:
+        if settings.fallback_provider == ProviderType.FAKE:
+            from app.core.config import get_settings as _get_settings
+            if _get_settings().requires_real_provider:
+                raise ProviderConfigError("Fake vision fallback is not allowed in a non-local environment")
+            return FakeVisionProvider()
+        if settings.fallback_provider == ProviderType.GROQ:
+            if not settings.groq_api_key:
+                logger.warning("groq_vision_fallback_not_configured", extra={"reason": "missing_api_key"})
+                return None
+            return GroqVisionProvider(
+                api_key=settings.groq_api_key,
+                tpm_limit=settings.groq_tpm_limit,
+                rpm_limit=settings.groq_rpm_limit,
+            )
+        if settings.fallback_provider == ProviderType.GEMINI:
+            if not settings.gemini_api_key:
+                logger.warning("gemini_vision_fallback_not_configured", extra={"reason": "missing_api_key"})
+                return None
+            return GeminiVisionProvider(
+                api_key=settings.gemini_api_key,
+                model=settings.gemini_model,
+                tpm_limit=settings.gemini_tpm_limit,
+                rpm_limit=settings.gemini_rpm_limit,
+            )
+    except Exception as exc:
+        logger.warning(
+            "vision_fallback_provider_creation_failed",
+            extra={"fallback_provider": settings.fallback_provider.value, "error_type": type(exc).__name__},
+        )
+        return None
+    return None
+
+
+def get_vision_provider_with_fallback() -> ProviderWithFallback:
+    """Build a vision-capable provider pair with the same fallback policy as text."""
+    settings = load_provider_settings()
+    primary = create_vision_provider(settings)
+    fallback = create_fallback_vision_provider(settings)
+    return ProviderWithFallback(primary=primary, fallback=fallback)
 
 
 def get_provider_with_fallback() -> ProviderWithFallback:
