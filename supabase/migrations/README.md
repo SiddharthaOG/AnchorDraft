@@ -199,7 +199,7 @@ The following migrations have been applied to the shared AnchorDraft Supabase pr
 | 20261112154153 | `20261112154153_guideline_gap_analytics_fk_indexes.sql` | Index foreign keys introduced by guideline-gap analytics |
 | 20261112160607 | `20261112160607_guideline_suggestion_accept_status_ambiguity_fix.sql` | Qualify kit status references in suggestion acceptance RPC |
 | 20261112160635 | `20261112160635_guideline_suggestion_accept_rpc_qualified_columns.sql` | Qualify kit/rule/fact references in suggestion acceptance RPC |
-| 20261112160650 | `20261112160650_clone_kit_rpc_qualified_columns.sql` | Qualify source kit references in the versioned clone RPC |
+| 20261112161025 | `20261112161025_clone_kit_rpc_qualified_columns.sql` | Qualify source kit references in the versioned clone RPC |
 
 The three feature migrations above have been applied to the shared project. The final index migration was also applied and committed with the analytics feature. Do not reapply these schema changes manually; use the migration history and standard Supabase migration tooling to keep environments aligned.
 
