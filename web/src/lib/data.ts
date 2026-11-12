@@ -1062,6 +1062,136 @@ function getEngineUrl(): string {
 
 export { getEngineUrl };
 
+export interface GuidelineReasonCluster {
+  theme: string;
+  count: number;
+  examples: string[];
+  qualifies: boolean;
+}
+
+export interface GuidelineSuggestion {
+  id: string;
+  rule_key: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'stale';
+  suggested_text: string;
+  explanation: string;
+  source_kit_version: number;
+  created_at: string;
+  accepted_kit_id: string | null;
+  provider?: string | null;
+  model?: string | null;
+}
+
+export interface GuidelineGapRule {
+  rule_key: string;
+  category: string;
+  title: string;
+  guideline_text: string;
+  decided: number;
+  dismissed: number;
+  acted_on: number;
+  dismissal_rate: number;
+  reason_clusters: GuidelineReasonCluster[];
+  source_versions: number[];
+  is_gap: boolean;
+  suggestion: GuidelineSuggestion | null;
+}
+
+export interface GuidelineGapAnalytics {
+  kit: { id: string; version: number; name: string } | null;
+  rules: GuidelineGapRule[];
+  gaps: GuidelineGapRule[];
+}
+
+export interface GuidelineSuggestionPreview {
+  preview_id: string;
+  confirmation_token: string;
+  expires_at: string;
+  payload_sha256: string;
+  system_instruction: string;
+  user_content: string;
+  redaction_summary: {
+    total_matches: number;
+    by_type: Record<string, number>;
+    original_chars: number;
+    redacted_chars: number;
+    policy_version: number;
+  };
+}
+
+export interface GeneratedGuidelineSuggestion {
+  id: string;
+  status: 'pending';
+  rule_key: string;
+  suggested_text: string;
+  explanation: string;
+  source_kit_version: number;
+  created_at: string;
+  model: string;
+}
+
+async function guidelineAnalyticsRequest<T>(path: string, method: 'GET' | 'POST', body?: Record<string, unknown>): Promise<T> {
+  const token = await getAuthToken();
+  const response = await fetch(getEngineUrl() + path, {
+    method,
+    cache: 'no-store',
+    headers: {
+      Authorization: 'Bearer ' + token,
+      'Content-Type': 'application/json',
+      'X-Request-Id': crypto.randomUUID(),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = payload && typeof payload === 'object' ? (payload as Record<string, unknown>).detail : undefined;
+    const nested = detail && typeof detail === 'object' ? (detail as Record<string, unknown>).error : undefined;
+    const message = nested && typeof nested === 'object' && typeof (nested as Record<string, unknown>).message === 'string'
+      ? (nested as Record<string, unknown>).message as string
+      : 'Guideline analytics request failed (' + response.status + ')';
+    throw new Error(message);
+  }
+  return payload as T;
+}
+
+export async function getGuidelineGapAnalytics(): Promise<GuidelineGapAnalytics> {
+  return guidelineAnalyticsRequest<GuidelineGapAnalytics>('/v1/analytics/guideline-gaps', 'GET');
+}
+
+export async function createGuidelineSuggestionPreview(ruleKey: string): Promise<GuidelineSuggestionPreview> {
+  return guidelineAnalyticsRequest<GuidelineSuggestionPreview>(
+    '/v1/analytics/guideline-gaps/' + encodeURIComponent(ruleKey) + '/suggestion-preview',
+    'POST',
+  );
+}
+
+export async function confirmGuidelineSuggestionPreview(
+  previewId: string,
+  confirmationToken: string,
+): Promise<GeneratedGuidelineSuggestion> {
+  return guidelineAnalyticsRequest<GeneratedGuidelineSuggestion>(
+    '/v1/analytics/suggestion-previews/' + encodeURIComponent(previewId) + '/confirm',
+    'POST',
+    { confirmation_token: confirmationToken },
+  );
+}
+
+export async function acceptGuidelineSuggestion(suggestionId: string): Promise<{ status: string; kit_id: string; version: number }> {
+  return guidelineAnalyticsRequest(
+    '/v1/analytics/suggestions/' + encodeURIComponent(suggestionId) + '/accept',
+    'POST',
+  );
+}
+
+export async function rejectGuidelineSuggestion(suggestionId: string, reason?: string): Promise<{ status: string }> {
+  return guidelineAnalyticsRequest(
+    '/v1/analytics/suggestions/' + encodeURIComponent(suggestionId) + '/reject',
+    'POST',
+    { reason: reason || null },
+  );
+}
+
+
 export interface VisualAssetUploadResponse {
   asset_id: string;
   width: number;

@@ -186,3 +186,11 @@ After running migrations and seed scripts, verify:
 - [ ] Core seed data (organization) inserts without conflicts
 - [ ] Seed scripts execute successfully with actual Auth user UUIDs
 - [ ] Row counts match expected values (see table above)
+
+## Improvement 3 — Guideline-gap analytics
+
+| File | Description |
+|---|---|
+| `20261112110000_guideline_gap_analytics.sql` | Suggestion/preview tables, manager-owner RLS, serialized kit cloning, atomic accept/reject functions |
+
+This migration is part of the Improvement 3 feature branch and has **not** been applied to the shared Supabase project. Apply it only after the branch is reviewed and merged in the intended deployment sequence.
