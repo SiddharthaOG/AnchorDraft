@@ -224,7 +224,7 @@ class TestIntegratedRouterRegistration:
         assert "put" in paths["/v1/kits/{kit_id}/visual-guidelines"]
 
     @pytest.mark.asyncio
-    async def test_cors_preflight_allows_visual_guideline_put(self, client):
+    async def test_cors_preflight_allows_visual_guideline_put(self, client_comma_separated):
         response = await client.options(
             "/v1/kits/22222222-2222-2222-2222-222222222222/visual-guidelines",
             headers={
