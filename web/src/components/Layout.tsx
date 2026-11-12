@@ -1,6 +1,7 @@
-import { useState } from 'react';
-import { Outlet, Link, NavLink } from 'react-router-dom';
+import { Suspense, useState } from 'react';
+import { Outlet, Link, NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../features/auth/AuthProvider';
+import { LoadingScreen } from './LoadingScreen';
 
 const navigation = [
   { path: '/', label: 'Overview', roles: ['creator', 'manager', 'reviewer', 'owner'], section: 'Workspace', icon: '◫' },
@@ -13,6 +14,7 @@ const navigation = [
 
 export function Layout() {
   const { session, signOut, getPrimaryRole, switchOrganization } = useAuth();
+  const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const visibleNav = navigation.filter(item =>
     session?.currentRoles.some((role: string) => item.roles.includes(role))
@@ -76,7 +78,7 @@ export function Layout() {
           <div className="ad-breadcrumb"><span>ANCHORDRAFT</span><i>/</i><strong>WORKSPACE</strong></div>
           <div className="ad-topbar-right"><span className="ad-secure"><span /> SECURE WORKSPACE</span><span className="ad-top-avatar">{initial}</span></div>
         </header>
-        <main className="ad-page"><Outlet /></main>
+        <main className="ad-page"><Suspense fallback={<LoadingScreen message="Loading workspace..." fullScreen={false} />}><div key={location.pathname} className="ad-route-transition"><Outlet /></div></Suspense></main>
         <footer className="ad-footer"><span>ANCHORDRAFT © 2026</span><span>Clarity before content goes live.</span></footer>
       </div>
     </div>
