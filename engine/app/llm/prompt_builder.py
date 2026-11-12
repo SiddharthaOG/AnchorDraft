@@ -37,6 +37,7 @@ class RuleData:
     guideline_text: str
     check_kind: Literal["deterministic", "llm"]
     needs_reviewer: bool = False
+    config: Optional[dict] = None
 
 
 @dataclass

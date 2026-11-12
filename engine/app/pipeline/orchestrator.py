@@ -16,6 +16,7 @@ from uuid import UUID
 
 from app.auth.supabase import get_supabase_client
 from app.checks import run_deterministic_checks, DeterministicCheckResult
+from app.checks.deterministic import RuleConfig, SkippedCheck, check_map
 from app.llm import get_provider_with_fallback
 from app.models.pipeline import (
     ProviderRequest,
@@ -168,6 +169,7 @@ class SupabaseDataLoader:
                 guideline_text=r["guideline_text"],
                 check_kind=r["check_kind"],
                 needs_reviewer=r.get("needs_reviewer", False),
+                config=r.get("config"),
             ))
 
         facts = []
@@ -296,15 +298,84 @@ class ReviewOrchestrator:
                 uuid.UUID(review_id), uuid.UUID(preview_id),
             )
 
+    @staticmethod
+    def _resolve_deterministic_rule(rule: RuleData) -> tuple[RuleConfig | None, str | None]:
+        """Convert persisted rule data into a validated check configuration.
+
+        Newer records may declare ``config.check``. Older records in existing
+        kits predate that discriminator, so infer only from an unambiguous
+        required-key signature. Never guess when the configuration is absent,
+        malformed, ambiguous, or names an unsupported check.
+        """
+        config = rule.config
+        if not isinstance(config, dict):
+            return None, "Deterministic rule config must be an object"
+
+        declared = config.get("check")
+        signatures = {
+            "term_map": {"entries"},
+            "phrase_list": {"phrases"},
+            "missing_alt_text": {"min_length", "generic"},
+            "required_disclosure": {"when_any", "require_any"},
+        }
+
+        if declared is not None:
+            if not isinstance(declared, str) or declared not in check_map or check_map[declared] is None:
+                return None, f"Unsupported deterministic check type: {declared!r}"
+            check_name = declared
+        else:
+            matches = [
+                name for name, required_keys in signatures.items()
+                if required_keys.issubset(config.keys())
+            ]
+            if len(matches) != 1:
+                reason = "Ambiguous deterministic config shape" if matches else "Cannot infer deterministic check type from config"
+                return None, reason
+            check_name = matches[0]
+
+        check_config = {key: value for key, value in config.items() if key != "check"}
+        rule_config = RuleConfig(
+            check=check_name,
+            config=check_config,
+            rule_key=rule.rule_key,
+            category=rule.category,
+            severity=rule.severity,
+            guideline_text=rule.guideline_text,
+            needs_reviewer=rule.needs_reviewer,
+        )
+        try:
+            checker = check_map[check_name](rule_config)
+            checker.validate_config()
+        except (TypeError, ValueError) as exc:
+            return None, f"Invalid {check_name} config: {exc}"
+        except Exception as exc:
+            return None, f"Unable to initialize {check_name} check: {type(exc).__name__}"
+        return rule_config, None
+
     async def _run_deterministic_checks(
         self,
         text: str,
         rules: list[RuleData],
     ) -> DeterministicCheckResult:
-        """Run deterministic checks against the revision text."""
-        # Filter to only deterministic rules
+        """Run deterministic checks; isolate unsupported rules as skipped."""
         deterministic_rules = [r for r in rules if r.check_kind == "deterministic"]
-        return run_deterministic_checks(text, deterministic_rules)
+        resolved: list[RuleConfig] = []
+        skipped: list[SkippedCheck] = []
+
+        for rule in deterministic_rules:
+            rule_config, reason = self._resolve_deterministic_rule(rule)
+            if rule_config is None:
+                skipped.append(SkippedCheck(
+                    rule_key=rule.rule_key,
+                    check_type="unresolved",
+                    reason=reason or "Unsupported deterministic configuration",
+                ))
+            else:
+                resolved.append(rule_config)
+
+        result = run_deterministic_checks(text, resolved)
+        result.skipped_checks = skipped + result.skipped_checks
+        return result
 
     def _convert_deterministic_to_pipeline(
         self,

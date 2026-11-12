@@ -34,6 +34,58 @@ from app.llm.token_budget import TokenBudgetExceededError
 from app.llm.prompt_builder import RuleData, FactData
 
 
+class TestDeterministicRuleMapping:
+    def test_resolves_legacy_term_map_config_and_preserves_metadata(self):
+        rule = make_rule_data(
+            rule_key="TERM-01", severity="high", needs_reviewer=True,
+            config={"entries": [{"avoid": ["utilize"], "prefer": "use"}]},
+        )
+        resolved, reason = ReviewOrchestrator._resolve_deterministic_rule(rule)
+        assert reason is None
+        assert resolved.check == "term_map"
+        assert resolved.config["entries"][0]["prefer"] == "use"
+        assert resolved.severity == "high"
+        assert resolved.needs_reviewer is True
+
+    @pytest.mark.parametrize(("config", "expected"), [
+        ({"entries": [{"avoid": ["leverage"], "prefer": "use"}]}, "term_map"),
+        ({"phrases": ["guaranteed"]}, "phrase_list"),
+        ({"min_length": 5, "generic": ["image"]}, "missing_alt_text"),
+        ({"when_any": ["sponsored"], "require_any": ["#ad"]}, "required_disclosure"),
+    ])
+    def test_resolves_each_supported_legacy_shape(self, config, expected):
+        resolved, reason = ReviewOrchestrator._resolve_deterministic_rule(
+            make_rule_data(config=config)
+        )
+        assert reason is None
+        assert resolved.check == expected
+
+    @pytest.mark.parametrize("config, expected_reason", [
+        (None, "must be an object"),
+        ({"unknown": ["x"]}, "Cannot infer"),
+        ({"entries": [], "phrases": []}, "Ambiguous"),
+        ({"check": "not_registered", "phrases": ["x"]}, "Unsupported"),
+        ({"entries": [{"avoid": ["x"]}]}, "Invalid term_map config"),
+    ])
+    def test_unsupported_or_invalid_configs_are_skipped(self, config, expected_reason):
+        rule = make_rule_data(config=config)
+        resolved, reason = ReviewOrchestrator._resolve_deterministic_rule(rule)
+        assert resolved is None
+        assert expected_reason in reason
+
+    @pytest.mark.asyncio
+    async def test_unsupported_rule_does_not_abort_other_deterministic_checks(self):
+        orchestrator = ReviewOrchestrator.__new__(ReviewOrchestrator)
+        rules = [
+            make_rule_data(rule_key="TERM-01", config={"entries": [{"avoid": ["utilize"], "prefer": "use"}]}),
+            make_rule_data(rule_key="BROKEN-01", config={"unrecognized": True}),
+        ]
+        result = await orchestrator._run_deterministic_checks("Please utilize this.", rules)
+        assert [candidate.ref_key for candidate in result.candidates] == ["TERM-01"]
+        assert len(result.skipped_checks) == 1
+        assert result.skipped_checks[0].rule_key == "BROKEN-01"
+
+
 # ============================================================================
 # Confirmed preview loading contract
 # ============================================================================
@@ -146,6 +198,7 @@ def make_rule_data(
     guideline_text: str = "Test guideline",
     check_kind: str = "deterministic",
     needs_reviewer: bool = False,
+    config: dict | None = None,
 ) -> RuleData:
     """Create a RuleData for testing."""
     return RuleData(
@@ -156,6 +209,7 @@ def make_rule_data(
         guideline_text=guideline_text,
         check_kind=check_kind,
         needs_reviewer=needs_reviewer,
+        config=config,
     )
 
 
@@ -311,6 +365,7 @@ class TestSupabaseDataLoader:
                 "title": "Avoid utilize",
                 "guideline_text": "Use 'use' instead of 'utilize'",
                 "check_kind": "deterministic",
+                "config": {"entries": [{"avoid": ["utilize"], "prefer": "use"}]},
                 "needs_reviewer": True,
             },
             {
@@ -330,6 +385,7 @@ class TestSupabaseDataLoader:
         assert len(rules) == 2
         assert rules[0].needs_reviewer is True
         assert rules[1].needs_reviewer is False
+        assert rules[0].config == {"entries": [{"avoid": ["utilize"], "prefer": "use"}]}
         assert all(isinstance(r, RuleData) for r in rules)
 
     def test_load_rules_and_facts_parses_database_date_strings(self):
