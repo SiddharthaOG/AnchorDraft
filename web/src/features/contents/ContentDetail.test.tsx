@@ -626,6 +626,180 @@ describe('ContentDetail', () => {
     });
   });
 
+  describe('Revision-specific review isolation', () => {
+    it('loads each revision review and findings independently and keeps historical findings read-only', { timeout: 15000 }, async () => {
+      const historicalRevision = { ...defaultRevision, id: 'revision-v4', version: 4, body: 'Historical body' };
+      const currentRevision = { ...defaultRevision, id: 'revision-v6', version: 6, body: 'Current body' };
+      const historicalReview = { ...defaultReview, id: 'review-v4', revision_id: historicalRevision.id };
+      const currentReview = { ...defaultReview, id: 'review-v6', revision_id: currentRevision.id };
+      const makeFinding = (id: string, reviewId: string, index: number) => ({
+        id, org_id: 'org-1', review_id: reviewId, source: 'llm' as const,
+        rule_id: null, fact_id: null, ref_key: 'CLAIM-' + index,
+        category: 'claim' as const, severity: 'high' as const,
+        quote: 'quote-' + id, start_offset: 0, end_offset: 8,
+        explanation: 'Finding explanation ' + id, suggestion: 'Suggestion ' + id,
+        confidence: 0.9, needs_human: false, needs_reviewer: false,
+        created_at: '2026-01-0' + index + 'T00:00:00Z',
+        last_action: null, last_reason: null, last_edited_text: null,
+        resulting_revision_id: null, decided_at: null,
+      });
+      const historicalFindings = Array.from({ length: 6 }, (_, i) => makeFinding('v4-' + (i + 1), historicalReview.id, i + 1));
+      const currentFindings = Array.from({ length: 4 }, (_, i) => makeFinding('v6-' + (i + 1), currentReview.id, i + 1));
+      mockGetLatestRevision.mockResolvedValue(currentRevision);
+      mockGetRevisions.mockResolvedValue([currentRevision, historicalRevision]);
+      mockGetLatestReviewForRevision.mockImplementation(async (revisionId: string) => {
+        if (revisionId === historicalRevision.id) return historicalReview;
+        if (revisionId === currentRevision.id) return currentReview;
+        return null;
+      });
+      mockGetFindingsWithDecisionsForReview.mockImplementation(async (reviewId: string) => {
+        if (reviewId === historicalReview.id) return historicalFindings;
+        if (reviewId === currentReview.id) return currentFindings;
+        return [];
+      });
+
+      await renderAndWaitForLoad(<ContentDetail />);
+      await waitFor(() => {
+        expect(screen.getByText('Findings (4)')).toBeInTheDocument();
+        expect(mockGetLatestReviewForRevision).toHaveBeenCalledWith(currentRevision.id);
+      });
+      expect(screen.getByText('Finding explanation v6-1')).toBeInTheDocument();
+      expect(screen.queryByText('Finding explanation v4-1')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /Revision 4/ }));
+      await waitFor(() => {
+        expect(mockGetLatestReviewForRevision).toHaveBeenCalledWith(historicalRevision.id);
+        expect(screen.getByText('Findings (6)')).toBeInTheDocument();
+      });
+      expect(screen.getByText('Finding explanation v4-1')).toBeInTheDocument();
+      expect(screen.queryByText('Finding explanation v6-1')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Accept' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /Revision 6/ }));
+      await waitFor(() => expect(screen.getByText('Findings (4)')).toBeInTheDocument());
+      expect(screen.getByText('Finding explanation v6-1')).toBeInTheDocument();
+      expect(screen.queryByText('Finding explanation v4-1')).not.toBeInTheDocument();
+    });
+
+    it('ignores a delayed historical review response after switching back to the latest revision', { timeout: 15000 }, async () => {
+      const historicalRevision = { ...defaultRevision, id: 'revision-v4', version: 4 };
+      const currentRevision = { ...defaultRevision, id: 'revision-v6', version: 6 };
+      const historicalReview = { ...defaultReview, id: 'review-v4', revision_id: historicalRevision.id };
+      const currentReview = { ...defaultReview, id: 'review-v6', revision_id: currentRevision.id };
+      let resolveHistoricalReview!: (review: any) => void;
+      const delayedHistoricalReview = new Promise(resolve => { resolveHistoricalReview = resolve; });
+
+      mockGetLatestRevision.mockResolvedValue(currentRevision);
+      mockGetRevisions.mockResolvedValue([currentRevision, historicalRevision]);
+      mockGetLatestReviewForRevision.mockImplementation((revisionId: string) => {
+        if (revisionId === historicalRevision.id) return delayedHistoricalReview;
+        return Promise.resolve(currentReview);
+      });
+      mockGetFindingsWithDecisionsForReview.mockImplementation(async (reviewId: string) =>
+        reviewId === currentReview.id ? [] : [],
+      );
+
+      await renderAndWaitForLoad(<ContentDetail />);
+      await waitFor(() => expect(screen.getByText('Findings', { selector: 'p' })).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /Revision 4/ }));
+      await waitFor(() => expect(mockGetLatestReviewForRevision).toHaveBeenCalledWith(historicalRevision.id));
+
+      fireEvent.click(screen.getByRole('button', { name: /Revision 6/ }));
+      await waitFor(() => expect(screen.getByText('Findings', { selector: 'p' })).toBeInTheDocument());
+
+      await act(async () => {
+        resolveHistoricalReview(historicalReview);
+        await delayedHistoricalReview;
+      });
+
+      expect(screen.queryByText('No review is available for historical Revision 4.')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Start Review' })).not.toBeInTheDocument();
+      expect(mockGetLatestReviewForRevision).toHaveBeenLastCalledWith(currentRevision.id);
+    });
+
+    it('does not offer a new review preview for a historical revision without a review', { timeout: 15000 }, async () => {
+      const historicalRevision = { ...defaultRevision, id: 'revision-v4', version: 4 };
+      const currentRevision = { ...defaultRevision, id: 'revision-v6', version: 6 };
+      mockGetLatestRevision.mockResolvedValue(currentRevision);
+      mockGetRevisions.mockResolvedValue([currentRevision, historicalRevision]);
+      mockGetLatestReviewForRevision.mockImplementation(async (revisionId: string) =>
+        revisionId === currentRevision.id ? defaultReview : null,
+      );
+      await renderAndWaitForLoad(<ContentDetail />);
+      fireEvent.click(screen.getByRole('button', { name: /Revision 4/ }));
+      expect(await screen.findByText('No review is available for historical Revision 4.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Start Review' })).not.toBeInTheDocument();
+      expect(mockCreateReviewPreview).not.toHaveBeenCalled();
+    });
+
+    it('discards a delayed preview response when the user switches to a historical revision', { timeout: 15000 }, async () => {
+      const historicalRevision = { ...defaultRevision, id: 'revision-0', version: 0 };
+      let resolvePreview!: (preview: any) => void;
+      const delayedPreview = new Promise(resolve => { resolvePreview = resolve; });
+
+      mockGetLatestRevision.mockResolvedValue(defaultRevision);
+      mockGetRevisions.mockResolvedValue([defaultRevision, historicalRevision]);
+      mockGetLatestReviewForRevision.mockResolvedValue(null);
+      mockCreateReviewPreview.mockReturnValueOnce(delayedPreview);
+
+      await renderAndWaitForLoad(<ContentDetail />);
+      fireEvent.click(screen.getByRole('button', { name: 'Start Review' }));
+      await waitFor(() => expect(mockCreateReviewPreview).toHaveBeenCalledWith(defaultRevision.id));
+
+      fireEvent.click(screen.getByRole('button', { name: /Revision 0/ }));
+      expect(await screen.findByText('No review is available for historical Revision 0.')).toBeInTheDocument();
+
+      await act(async () => {
+        resolvePreview({
+          preview_id: 'stale-preview',
+          revision_id: defaultRevision.id,
+          confirmation_token: 'stale-token',
+          expires_at: '2026-11-12T12:10:00Z',
+          redacted_draft: 'Stale preview',
+          text_provider_preview: { system_instruction: 'Review', user_content: 'Stale' },
+          vision_provider_preview: null,
+          assets: [],
+          image_consent_required: false,
+          redaction_summary: { total_matches: 0, by_type: {}, original_chars: 5, redacted_chars: 5, policy_version: 1 },
+          payload_sha256: 'c'.repeat(64),
+        });
+        await delayedPreview;
+      });
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Confirm & Run Review' })).not.toBeInTheDocument();
+      expect(mockConfirmReviewPreview).not.toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: 'Start Review' })).not.toBeInTheDocument();
+    });
+
+    it('closes an open preview and clears image consent when switching revisions', { timeout: 15000 }, async () => {
+      const historicalRevision = { ...defaultRevision, id: 'revision-0', version: 0 };
+      mockGetLatestRevision.mockResolvedValue(defaultRevision);
+      mockGetRevisions.mockResolvedValue([defaultRevision, historicalRevision]);
+      mockGetLatestReviewForRevision.mockResolvedValue(null);
+
+      await renderAndWaitForLoad(<ContentDetail />);
+      fireEvent.click(screen.getByRole('button', { name: 'Start Review' }));
+      await screen.findByRole('dialog');
+
+      const consent = screen.getByRole('checkbox', {
+        name: /explicitly consent to sending them in their stored form/i,
+      });
+      fireEvent.click(consent);
+      expect(consent).toBeChecked();
+
+      fireEvent.click(screen.getByRole('button', { name: /Revision 0/ }));
+      expect(await screen.findByText('No review is available for historical Revision 0.')).toBeInTheDocument();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', {
+        name: /explicitly consent to sending them in their stored form/i,
+      })).not.toBeInTheDocument();
+      expect(mockConfirmReviewPreview).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Existing safeguards preserved', () => {
     it('Start Review button is enabled when no review exists', { timeout: 15000 }, async () => {
       // Remove the default review
@@ -839,6 +1013,63 @@ describe('ContentDetail', () => {
       expect(screen.queryByRole('button', { name: 'Submit for Review' })).not.toBeInTheDocument();
     });
 
+    it('keeps findings returned by a completed polling request', { timeout: 15000 }, async () => {
+      let resolveTerminalFindings!: (value: any[]) => void;
+      const terminalFindings = new Promise<any[]>(resolve => {
+        resolveTerminalFindings = resolve;
+      });
+      const queuedReview = { ...defaultReview, status: 'queued' as const };
+      const completedReview = { ...defaultReview, status: 'done' as const };
+      const finding = {
+        id: 'finding-from-poll',
+        org_id: 'org-1',
+        review_id: 'review-1',
+        source: 'llm',
+        rule_id: null,
+        fact_id: null,
+        ref_key: 'CLAIM-01',
+        category: 'claim',
+        severity: 'high',
+        quote: 'guaranteed uptime',
+        start_offset: 0,
+        end_offset: 17,
+        explanation: 'Unsupported absolute guarantee',
+        suggestion: 'remove the guarantee',
+        confidence: 0.98,
+        needs_human: false,
+        needs_reviewer: false,
+        created_at: '2026-01-01T00:00:00Z',
+        last_action: null,
+        last_reason: null,
+        last_edited_text: null,
+        resulting_revision_id: null,
+        decided_at: null,
+      };
+
+      mockGetLatestReviewForRevision
+        .mockResolvedValueOnce(queuedReview)
+        .mockResolvedValueOnce(completedReview);
+      mockGetFindingsWithDecisionsForReview
+        .mockResolvedValueOnce([])
+        .mockReturnValueOnce(terminalFindings);
+
+      await renderAndWaitForLoad(<ContentDetail />);
+
+      await waitFor(() => {
+        expect(mockGetFindingsWithDecisionsForReview).toHaveBeenCalledTimes(2);
+      });
+
+      // Let the terminal findings fetch complete only after the UI has seen
+      // the completed status. The poll must remain valid until it stores them.
+      await act(async () => {
+        resolveTerminalFindings([finding]);
+        await terminalFindings;
+      });
+
+      expect(await screen.findByText(/Findings \(1\)/)).toBeInTheDocument();
+      expect(screen.getByText('Unsupported absolute guarantee')).toBeInTheDocument();
+      expect(screen.queryByText('No findings were generated. You can submit this content for approval.')).not.toBeInTheDocument();
+    });
     it('cannot submit when review failed or unfinished', async () => {
       mockGetLatestReviewForRevision.mockResolvedValue({
         ...defaultReview,

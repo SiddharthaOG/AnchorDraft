@@ -79,12 +79,15 @@ class Settings(BaseSettings):
     # Groq settings
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "openai/gpt-oss-120b"
+    GROQ_VISION_MODEL: str = "qwen/qwen3.8-27b"
     GROQ_TPM_LIMIT: int = 8000
     GROQ_RPM_LIMIT: int = 30
 
     # Gemini settings
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.8-flash"
+    # Distinct same-provider fallback for transient Gemini 3.8 capacity failures.
+    GEMINI_FALLBACK_MODEL: str = "gemini-3.6-flash"
     GEMINI_TPM_LIMIT: int = 250000
     GEMINI_RPM_LIMIT: int = 15
 

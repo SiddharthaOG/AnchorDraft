@@ -363,20 +363,32 @@ class GeminiProvider:
         # Gemini uses a single content field with system instruction as prefix
         full_content = f"{request.system_instruction}\n\n{request.user_content}"
 
-        # Single retry for transient failures
+        # One provider-level retry is allowed, but both attempts and the
+        # backoff share this single deadline. The outer fallback wrapper may
+        # impose an even shorter deadline and cancel this coroutine safely.
         max_retries = 1
+        provider_deadline = time.monotonic() + request.timeout_seconds
         last_exception = None
 
+        logger.info(
+            "gemini_request_started",
+            extra={"model": self._model, "timeout_budget_seconds": request.timeout_seconds},
+        )
+
         for attempt in range(max_retries + 1):
+            remaining = provider_deadline - time.monotonic()
+            if remaining <= 0:
+                last_exception = TimeoutError("Gemini provider retry budget exhausted")
+                break
+            attempt_started = time.perf_counter()
             try:
-                # Respect timeout
                 response = await asyncio.wait_for(
                     self._client.aio.models.generate_content(
                         model=self._model,
                         contents=full_content,
                         config=generation_config,
                     ),
-                    timeout=request.timeout_seconds,
+                    timeout=remaining,
                 )
 
                 latency_ms = int((time.perf_counter() - start_time) * 1000)
@@ -393,6 +405,8 @@ class GeminiProvider:
                         "output_tokens": result.output_tokens,
                         "finish_reason": result.finish_reason,
                         "attempt": attempt + 1,
+                        "attempt_duration_ms": int((time.perf_counter() - attempt_started) * 1000),
+                        "total_elapsed_ms": latency_ms,
                     },
                 )
 
@@ -407,7 +421,8 @@ class GeminiProvider:
                     extra={
                         "model": self._model,
                         "attempt": attempt + 1,
-                        "timeout_seconds": request.timeout_seconds,
+                        "timeout_seconds": round(remaining, 3),
+                        "attempt_duration_ms": int((time.perf_counter() - attempt_started) * 1000),
                         "error_type": "asyncio.TimeoutError",
                     },
                 )
@@ -453,12 +468,14 @@ class GeminiProvider:
                     for code in ["500", "502", "503", "504", "internal", "unavailable"]
                 ):
                     last_exception = UnavailableError(f"Gemini service unavailable: {error_msg}")
+                    safe_metadata = self._safe_error_metadata(e)
+                    status_code = safe_metadata.get("status_code", safe_metadata.get("code", "unknown"))
                     logger.warning(
-                        "gemini_unavailable",
-                        extra={
-                            "model": self._model,
-                            **self._safe_error_metadata(e),
-                        },
+                        "gemini_unavailable model=%s status=%s error_type=%s",
+                        self._model,
+                        status_code,
+                        type(e).__name__,
+                        extra=safe_metadata,
                     )
 
                 elif "permission" in error_lower and "safety" in error_lower:
@@ -505,12 +522,28 @@ class GeminiProvider:
                 elif isinstance(last_exception, (TimeoutError, UnavailableError)):
                     wait_time = min(2 ** attempt, 10)
 
-                if wait_time > 0:
+                remaining = provider_deadline - time.monotonic()
+                if wait_time > 0 and remaining > wait_time + 0.25:
                     logger.info(
                         "gemini_retry_wait",
-                        extra={"model": self._model, "wait_seconds": wait_time, "attempt": attempt + 1},
+                        extra={
+                            "model": self._model,
+                            "wait_seconds": wait_time,
+                            "attempt": attempt + 1,
+                            "remaining_budget_seconds": round(remaining, 3),
+                        },
                     )
                     await asyncio.sleep(wait_time)
+                elif attempt < max_retries:
+                    logger.warning(
+                        "gemini_retry_skipped_budget_exhausted",
+                        extra={
+                            "model": self._model,
+                            "remaining_budget_seconds": round(max(0.0, remaining), 3),
+                            "retry_backoff_seconds": wait_time,
+                        },
+                    )
+                    break
 
         # All retries exhausted
         if last_exception:
