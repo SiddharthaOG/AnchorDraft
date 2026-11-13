@@ -1,21 +1,23 @@
 /** Tests for OwnerLanding component. */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { OwnerLanding } from './OwnerLanding';
 
 // Mock the data layer using vi.hoisted
-const { mockGetKitStats, mockGetKitRules, mockGetKitFacts } = vi.hoisted(() => ({
+const { mockGetKitStats, mockGetKitRules, mockGetKitFacts, mockCloneKit } = vi.hoisted(() => ({
   mockGetKitStats: vi.fn(),
   mockGetKitRules: vi.fn(),
   mockGetKitFacts: vi.fn(),
+  mockCloneKit: vi.fn(),
 }));
 
 vi.mock('../../lib/data', () => ({
   getKitStats: mockGetKitStats,
   getKitRules: mockGetKitRules,
   getKitFacts: mockGetKitFacts,
+  cloneKit: mockCloneKit,
 }));
 
 // Mock the auth service using vi.hoisted
@@ -61,6 +63,7 @@ function TestWrapper({ children }: { children: React.ReactNode }) {
 describe('OwnerLanding', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCloneKit.mockResolvedValue({ kit_id: 'draft-kit-2', version: 2 });
     mockGetKitStats.mockResolvedValue({
       total_kits: 2,
       active_kit: {
@@ -190,14 +193,13 @@ describe('OwnerLanding', () => {
     });
   });
 
-  it('shows coming soon for disabled actions', async () => {
+  it('creates a draft from the active kit and exposes lint and analytics routes', async () => {
     render(<OwnerLanding />, { wrapper: TestWrapper });
-
-    await waitFor(() => {
-      expect(screen.getByText('Create Brand Kit')).toBeInTheDocument();
-      expect(screen.getAllByText('Coming soon')).toHaveLength(2); // Create Brand Kit and Lint Kit
-      expect(screen.getByText('Lint Kit')).toBeInTheDocument();
-    });
+    fireEvent.click(await screen.findByRole('button', { name: /Create Brand Kit/i }));
+    await waitFor(() => expect(mockCloneKit).toHaveBeenCalledWith('kit-1'));
+    expect(screen.getByRole('link', { name: /Lint Kit/i })).toHaveAttribute('href', '/kits');
+    expect(screen.getByRole('link', { name: /guideline-gap analytics/i })).toHaveAttribute('href', '/insights');
+    expect(screen.getByRole('link', { name: /Confidentiality settings/i })).toHaveAttribute('href', '/owner/confidentiality');
   });
 
   it('shows Manage Kits link as active', async () => {

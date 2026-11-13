@@ -1,13 +1,14 @@
 /** Owner (Guideline Owner) landing page - for brand kit management. */
 
 import React, { useEffect, useState, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../features/auth/AuthProvider';
 import { LoadingScreen } from '../../components/LoadingScreen';
 import {
   getKitStats,
   getKitRules,
   getKitFacts,
+  cloneKit,
   type KitStats,
   type BrandKit,
   type Rule,
@@ -78,6 +79,9 @@ function ErrorState({ message, onRetry }: { message: string; onRetry: () => void
 /** Owner dashboard landing page. */
 export function OwnerLanding() {
   const { session, isLoading: authLoading } = useAuth();
+  const navigate = useNavigate();
+  const [isCreatingKit, setIsCreatingKit] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [kitStats, setKitStats] = useState<KitStats | null>(null);
   const [activeKit, setActiveKit] = useState<BrandKit | null>(null);
   const [rules, setRules] = useState<Rule[]>([]);
@@ -137,6 +141,24 @@ export function OwnerLanding() {
       if (currentRequestId === requestIdRef.current) {
         setIsLoading(false);
       }
+    }
+  };
+
+  const handleCreateBrandKit = async () => {
+    if (!activeKit) {
+      navigate('/kits');
+      return;
+    }
+
+    setIsCreatingKit(true);
+    setActionError(null);
+    try {
+      const draft = await cloneKit(activeKit.id);
+      navigate(`/kits/${draft.kit_id}`);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Unable to create a draft brand kit.');
+    } finally {
+      setIsCreatingKit(false);
     }
   };
 
@@ -229,13 +251,18 @@ export function OwnerLanding() {
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <DisabledAction
-            label="Create Brand Kit"
+          <button
+            type="button"
+            onClick={() => void handleCreateBrandKit()}
+            disabled={isCreatingKit}
+            className="p-4 border border-gray-200 rounded-lg hover:border-primary hover:bg-gray-50 transition-colors text-center disabled:opacity-60"
           >
             <svg className="w-10 h-10 mx-auto text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
-          </DisabledAction>
+            <p className="font-medium text-gray-900">{isCreatingKit ? 'Creating draft...' : 'Create Brand Kit'}</p>
+            <p className="text-sm text-gray-500 mt-1">Clone the active kit into a new draft</p>
+          </button>
 
           <Link
             to="/kits"
@@ -248,13 +275,25 @@ export function OwnerLanding() {
             <p className="text-sm text-gray-500 mt-1">View and edit kits</p>
           </Link>
 
-          <DisabledAction
-            label="Lint Kit"
+          <Link
+            to="/kits"
+            className="p-4 border border-gray-200 rounded-lg hover:border-primary hover:bg-gray-50 transition-colors text-center"
           >
             <svg className="w-10 h-10 mx-auto text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-          </DisabledAction>
+            <p className="font-medium text-gray-900">Lint Kit</p>
+            <p className="text-sm text-gray-500 mt-1">Open a draft kit and run its checks</p>
+          </Link>
+        </div>
+        {actionError && <p role="alert" className="mt-3 text-sm text-red-700">{actionError}</p>}
+        <div className="mt-4 flex flex-wrap gap-4">
+          <Link to="/insights" className="text-sm font-medium text-primary hover:text-primary-dark">
+            Open guideline-gap analytics ?
+          </Link>
+          <Link to="/owner/confidentiality" className="text-sm font-medium text-primary hover:text-primary-dark">
+            Confidentiality settings ?
+          </Link>
         </div>
       </div>
 
