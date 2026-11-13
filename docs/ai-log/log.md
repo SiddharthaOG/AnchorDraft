@@ -1,6 +1,6 @@
 # AI Log
 
-## 2026-11-04 — Slice 0: Repository Skeleton & Hello-World Pipeline
+## 2026-11-04 â€” Slice 0: Repository Skeleton & Hello-World Pipeline
 
 **Architect:** Siddhartha
 **Duration:** ~2 hours
@@ -52,7 +52,7 @@ See `docs/ai-log/decisions.md`.
 
 1. Read all specification documents (AGENTS.md, ARCHITECTURE.md, DATA_MODEL.md, API_CONTRACT.md, REVIEW_ENGINE.md)
 2. Create plan for Slice 0 and wait for approval
-3. Implement monorepo layout per ARCHITECTURE.md §5.1
+3. Implement monorepo layout per ARCHITECTURE.md Â§5.1
 4. Implement FastAPI engine with health endpoint, middleware, CORS, pytest test
 5. Implement Vite/React/TypeScript/Tailwind web app with health check page
 6. Create all required documentation and config files
@@ -83,11 +83,11 @@ bace544 chore: slice 0 - repository skeleton and hello-world pipeline
 2. **No authentication** - JWT verification and Supabase Auth not wired (Slice 1)
 3. **No real LLM integration** - Using fake provider; provider spike needed (Slice 4)
 4. **CORS testing limited** - Test client doesn't fully exercise preflight; production CORS needs verification
-5. **Single commit** - All Slice 0 work in one commit; future slices should use smaller, reviewable commits per AGENTS.md §4
+5. **Single commit** - All Slice 0 work in one commit; future slices should use smaller, reviewable commits per AGENTS.md Â§4
 
 ---
 
-## 2026-11-05 — Slice 0: Corrections & Verification
+## 2026-11-05 â€” Slice 0: Corrections & Verification
 
 **Architect:** Siddhartha
 **Duration:** ~3 hours
@@ -132,36 +132,36 @@ Fixed and verified Slice 0 implementation per review feedback. Addressed CORS co
 cd engine
 pip install -e ".[test]"
 python -m pytest tests/ -v
-# → 14 passed (9 original + 5 new comma-separated tests)
+# â†’ 14 passed (9 original + 5 new comma-separated tests)
 
 # Web
 cd web
 npm ci
 npm run test
-# → 7 passed
+# â†’ 7 passed
 npm run build
-# → success (223 KB JS, 9 KB CSS gzipped)
+# â†’ success (223 KB JS, 9 KB CSS gzipped)
 
 # Engine health endpoint verification
 uvicorn app.main:app --port 8000
 curl http://localhost:8000/v1/health
-# → {"status":"ok","version":"0.1.0","time":"..."}
+# â†’ {"status":"ok","version":"0.1.0","time":"..."}
 ```
 
 ### Test/Build Results
 
 | Check | Result |
 |-------|--------|
-| Engine install (`pip install -e ".[test]"`) | ✅ Success |
-| Engine tests (`pytest`) | ✅ 14 passed |
-| Web install (`npm ci`) | ✅ Success |
-| Web tests (`npm run test`) | ✅ 7 passed |
-| Web build (`npm run build`) | ✅ Success (223 KB JS, 9 KB CSS) |
-| Engine health endpoint | ✅ Returns `{status, version, time}` |
-| CORS preflight (JSON array origins) | ✅ 200 with correct headers |
-| CORS preflight (comma-separated origins) | ✅ 200 with correct headers |
-| X-Request-Id middleware | ✅ Generated/echoed correctly |
-| No secrets in tracked files | ✅ Verified |
+| Engine install (`pip install -e ".[test]"`) | âœ… Success |
+| Engine tests (`pytest`) | âœ… 14 passed |
+| Web install (`npm ci`) | âœ… Success |
+| Web tests (`npm run test`) | âœ… 7 passed |
+| Web build (`npm run build`) | âœ… Success (223 KB JS, 9 KB CSS) |
+| Engine health endpoint | âœ… Returns `{status, version, time}` |
+| CORS preflight (JSON array origins) | âœ… 200 with correct headers |
+| CORS preflight (comma-separated origins) | âœ… 200 with correct headers |
+| X-Request-Id middleware | âœ… Generated/echoed correctly |
+| No secrets in tracked files | âœ… Verified |
 
 ### Deployment Status
 
@@ -173,9 +173,9 @@ curl http://localhost:8000/v1/health
 
 ### Remaining Blockers
 
-1. **Architecture decision status conflict** — Needs architect to confirm which decisions are actually DECIDED vs PROPOSED.
-2. **No CI pipeline** — Recommended but not required for Slice 0.
-3. **External service credentials** — Vercel, Render, Supabase require human setup; no secrets in repo.
+1. **Architecture decision status conflict** â€” Needs architect to confirm which decisions are actually DECIDED vs PROPOSED.
+2. **No CI pipeline** â€” Recommended but not required for Slice 0.
+3. **External service credentials** â€” Vercel, Render, Supabase require human setup; no secrets in repo.
 
 ### Recommended Next Action
 
@@ -184,7 +184,7 @@ curl http://localhost:8000/v1/health
 3. Proceed to Slice 1 (Schema, auth, roles, RLS) after approval.
 
 
-## 2026-11-12 — Improvement 2 Integration Hardening Follow-up
+## 2026-11-12 â€” Improvement 2 Integration Hardening Follow-up
 
 ### Summary
 
@@ -199,22 +199,22 @@ Traced the reported Start Review no-response regression against the deployed sta
 
 ### Verification
 
-- Engine: `py -3.12 -m pytest tests -q` — **702 passed, 4 skipped, 2 warnings**.
-- Web: `npm test -- --reporter=dot` — **183 passed**.
-- Web: `npm run build` — succeeded; existing Vite dynamic-import warning remains.
-- Provider factory smoke test with a non-secret placeholder credential and staging environment — instantiated `GeminiProvider` with model `gemini-3.8-flash`; this verifies provider selection, not the real API credential.
-- Render staging `/v1/health?deep=1` — `status=ok`, database connected.
-- Render CORS preflight for the current Vercel branch alias — HTTP 200 with the exact allow-origin and required headers.
-- Vercel branch deployment for commit `d6fb3e1` — READY and assigned to the branch alias.
+- Engine: `py -3.12 -m pytest tests -q` â€” **702 passed, 4 skipped, 2 warnings**.
+- Web: `npm test -- --reporter=dot` â€” **183 passed**.
+- Web: `npm run build` â€” succeeded; existing Vite dynamic-import warning remains.
+- Provider factory smoke test with a non-secret placeholder credential and staging environment â€” instantiated `GeminiProvider` with model `gemini-3.8-flash`; this verifies provider selection, not the real API credential.
+- Render staging `/v1/health?deep=1` â€” `status=ok`, database connected.
+- Render CORS preflight for the current Vercel branch alias â€” HTTP 200 with the exact allow-origin and required headers.
+- Vercel branch deployment for commit `d6fb3e1` â€” READY and assigned to the branch alias.
 
 ### Not Yet Verified
 
 - The exact cause inside the earlier HTTP 422 response was not retained in Render logs. The frontend now exposes FastAPI's validation details on the next request; an authenticated browser retest is still required to capture and resolve any underlying request-shape issue.
-- No authenticated preview → consent → confirmation → Gemini provider call was executed in this pass. Real provider acceptance, returned findings, and audit rows remain end-to-end checks, not claimed as complete.
-- Visual asset upload → vision analysis → visual findings and UI rendering remain end-to-end checks. Automated visual and confidentiality suites pass, but this does not replace a live workflow test.
+- No authenticated preview â†’ consent â†’ confirmation â†’ Gemini provider call was executed in this pass. Real provider acceptance, returned findings, and audit rows remain end-to-end checks, not claimed as complete.
+- Visual asset upload â†’ vision analysis â†’ visual findings and UI rendering remain end-to-end checks. Automated visual and confidentiality suites pass, but this does not replace a live workflow test.
 
 
-## 2026-11-12 — Start Review Silent No-op Guard
+## 2026-11-12 â€” Start Review Silent No-op Guard
 
 ### Finding and change
 
@@ -224,19 +224,19 @@ The handler now resolves the target revision from the explicitly selected revisi
 
 ### Verification
 
-- `npm run test -- --reporter=dot src/features/contents/ContentDetail.test.tsx` — 22 passed.
-- `npm run build` — succeeded; existing Vite dynamic-import warning remains.
-- Full web suite `npm test -- --reporter=dot` — 184 passed across 11 files. Existing nested-anchor React warnings remain in unrelated landing-page tests.
-- `git diff --check` — passed.
+- `npm run test -- --reporter=dot src/features/contents/ContentDetail.test.tsx` â€” 22 passed.
+- `npm run build` â€” succeeded; existing Vite dynamic-import warning remains.
+- Full web suite `npm test -- --reporter=dot` â€” 184 passed across 11 files. Existing nested-anchor React warnings remain in unrelated landing-page tests.
+- `git diff --check` â€” passed.
 - Commit `781f7d9 fix: prevent silent review start no-op` pushed to `feat/confidentiality-aware-processing`.
-- Vercel Preview deployment for `781f7d9` — READY; branch alias points to this deployment.
+- Vercel Preview deployment for `781f7d9` â€” READY; branch alias points to this deployment.
 
 ### Limitation
 
 No authenticated browser automation/session is available in this pass to prove pointer hit-testing and click delivery in the user's browser. The no-revision silent-return path is fixed and regression-tested; a live retest is still needed to confirm the user's exact record now reaches the preview API.
 
 
-## 2026-11-12 — Root Cause Fix: Latest Revision Identifier Contract
+## 2026-11-12 â€” Root Cause Fix: Latest Revision Identifier Contract
 
 ### Root cause
 
@@ -258,7 +258,7 @@ Changed `getLatestRevision()` to query the base `revisions` table ordered by des
 This fixes the frontend revision-loading contract shared by both Improvement 1 and Improvement 2 workflows. It does not bypass review authorization, preview confirmation, confidentiality policy checks, or image consent.
 
 
-## 2026-11-12 — Preview API 500: Normalize Fact Expiry Dates
+## 2026-11-12 â€” Preview API 500: Normalize Fact Expiry Dates
 
 ### Production-like failure found from Render logs
 
@@ -284,10 +284,10 @@ Supabase returns the `approved_facts.valid_until` DATE column as an ISO date str
 
 ### Remaining live verification
 
-The code fix is verified locally, but a new Render staging deployment and an authenticated Preview → confirm → Gemini processing run are still required to prove the live pipeline. Permissions-Policy feature warnings are emitted by the hosted response headers/browser compatibility and are not the cause of the preview failure.
+The code fix is verified locally, but a new Render staging deployment and an authenticated Preview â†’ confirm â†’ Gemini processing run are still required to prove the live pipeline. Permissions-Policy feature warnings are emitted by the hosted response headers/browser compatibility and are not the cause of the preview failure.
 
 
-## 2026-11-12 — Background Pipeline KeyError: Include Review Requester in Preview Query
+## 2026-11-12 â€” Background Pipeline KeyError: Include Review Requester in Preview Query
 
 ### Root cause
 
@@ -337,7 +337,7 @@ As of this entry, Improvement 2's live path has successfully completed `POST /v1
 - No backend code or database migration was changed in this upload UI slice.
 
 
-## 2026-11-12 — Review Confirmation 409: Stale Asset Manifest + Hidden UI Error
+## 2026-11-12 â€” Review Confirmation 409: Stale Asset Manifest + Hidden UI Error
 
 ### Live root cause confirmed from staging database and Render request logs
 
@@ -362,3 +362,62 @@ Changes:
 - Frontend production build: succeeded; existing ineffective dynamic-import warning remains.
 - `git diff --check`: passed.
 - No backend or database changes were required for this issue.
+
+## 2026-11-12 - Guideline-Gap Analytics Completion and Audit Refinements
+
+### Implementation refinements
+
+- Restricted historical evidence to completed reviews only, while retaining latest-decision-per-finding and exact current guideline-text matching.
+- Grouped unrelated/singleton dismissal reasons into an explicit Other group; Other never qualifies a guideline gap by itself.
+- Added a reviewer-decision coverage summary and per-rule evidence table so low sample sizes are not presented as missing guidelines.
+- Added tests for tenant scoping, completed-review filtering, verified actor propagation to service-only accept/reject RPCs, stale acceptance conflicts, Other-group behavior, and human rejection flow.
+
+### Verification
+
+- Focused backend analytics/API suite: **18 passed**.
+- Focused frontend GuidelineGapPanel suite: **5 passed**.
+- Full branch regression is pending after the final changes.
+- No hosted database migration or deployment was performed.
+
+## 2026-11-12 â€” Frontend redesign and whole-project integration hardening
+
+### Scope
+Worked only on `feat/frontend-redesign`, based on `main` commit `705c613`. No deployment, migration execution, production configuration change, merge, or change to the active staging revision test.
+
+### Frontend
+- Added the responsive editorial workspace shell, role-aware navigation, organization switcher, account footer, mobile drawer and secure-workspace header.
+- Added a warm neutral / forest palette through Tailwind CSS 4 theme tokens; restored the original primary color tokens after the initial redesign stylesheet had omitted them.
+- Kept system font stacks; no external font CDN or new package was introduced.
+- Added route-level lazy loading with an in-shell loading fallback, page-entry motion, hover/press transitions and reduced-motion support.
+- Added an application render error boundary with an honest recovery message.
+- Removed nested dashboard links that triggered React hydration warnings.
+- Removed import-time Supabase client creation from the data and auth modules. Authentication errors are caught and surfaced instead of escaping from the React effect.
+- Review, image-upload and kit-lint requests now retain request correlation IDs in structured errors.
+
+### Backend and integration
+- Normalized FastAPI HTTP and request-validation errors into the documented `ErrorResponse` shape. Validation responses do not echo rejected input values.
+- Validated inbound `X-Request-Id` values and ensured generic server/database errors return the request ID in both body and header.
+- Removed exception-trace logging from review/upload failure paths; logs retain IDs, duration and error type, not exception content.
+- Fixed `run_visual_analysis()` to forward the preview-approved provider request override and expected asset checksums to `VisualAnalyzer.analyze_assets()`.
+- Added regression tests for preview context propagation, API error normalization, request-ID validation, exception-log redaction, lazy Supabase initialization, auth failure handling and the app error boundary.
+
+### Verification
+- `web: npm run build`: passed (Vite 8.3.5; production chunks emitted).
+- `web: npm test`: **201 passed across 13 test files**.
+- `engine: Python 3.12 -m compileall -q app`: passed.
+- `engine: Python 3.12 -m pytest -q tests`: **733 passed, 4 skipped**.
+- `git diff --check`: passed.
+- One existing third-party warning remains: Starlette's deprecation notice for using `httpx` with `TestClient` in `test_cors_origins.py`. No tests failed.
+
+### Not verified / remaining work
+- The branch has not been deployed, so the redesign has not been visually inspected in a real browser against the live staging API.
+- No live Supabase migration or database mutation was run. SQL migration review was static: 18 created tables had matching RLS enablement statements; security-definer functions had fixed empty search paths in the reviewed migrations.
+- `ARCHITECTURE.md` and `docs/AGENTS.md` still describe the original Round 2 build window and say visual review/redaction are out of scope. Those documents are historical and now conflict with the codebase; they were not rewritten without the architect's separate approval.
+- Existing API and data workflows remain the source of truth; this branch does not introduce new product phases or change review/approval state transitions.
+
+### Explainability
+1. The browser remains a UI and direct-RLS reader; the FastAPI engine remains the trusted review service.
+2. Workflow state changes remain database-function controlled; no service key moved to the browser.
+3. The new visual shell changes presentation and loading behaviour, not review data contracts.
+4. Error envelopes carry a stable request ID so the UI can show a support reference without exposing internal exception details.
+5. The visual analyzer now receives the same approved provider request and asset checksums captured by the preview flow.

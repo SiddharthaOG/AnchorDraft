@@ -345,3 +345,20 @@ Each candidate finding is either **kept** or **dropped** with one reason: `schem
 - [ ] Does the partial-result path work when the model is down at demo time?
 - [ ] Can the web app render highlights correctly from code-point offsets?
 - [ ] Is every ASSUMPTION either accepted or replaced with a measured value?
+
+
+## 16. Guideline-gap analytics (Improvement 3)
+
+All endpoints below require an authenticated organisation manager or owner. The backend derives the organisation from the verified membership; callers cannot supply an arbitrary organisation ID.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/v1/analytics/guideline-gaps` | Return active-kit rules, version-compatible decision metrics, and grouped dismissal reasons |
+| POST | `/v1/analytics/guideline-gaps/{rule_key}/suggestion-preview` | Build and persist a short-lived, redacted provider preview; no model call occurs |
+| POST | `/v1/analytics/suggestion-previews/{preview_id}/confirm` | Consume a one-time token, revalidate kit/policy fingerprints, call provider, and persist a pending proposal |
+| POST | `/v1/analytics/suggestions/{suggestion_id}/accept` | Atomically create and activate a new kit version with the accepted guideline |
+| POST | `/v1/analytics/suggestions/{suggestion_id}/reject` | Record a human rejection and optional reason |
+
+Analytics count only the latest decision per finding. Historical decisions are pooled only when their stable rule key and exact guideline wording match the current active rule. A gap requires at least five decided findings, a dismissal rate of at least 50%, and a repeated reason cluster. Reason grouping is deterministic and explainable.
+
+Suggestion generation is two-step. The user sees the exact redacted provider request before confirming. The provider receives only redacted guideline/reason content. Preview tokens are single-use and expire after ten minutes. Accept/reject are server-side state transitions; acceptance is atomic and rejects stale source versions.

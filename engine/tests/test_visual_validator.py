@@ -270,3 +270,26 @@ def test_visual_guidelines_prompt_discloses_only_the_supported_reference_keys():
     assert "PALETTE | REF_KEY: PALETTE-01" in prompt
     assert "CONTRAST | REF_KEY: CONTRAST-01" in prompt
     assert "LOGO-01" not in prompt
+
+
+def test_visual_logo_guidelines_are_exposed_to_vision_model_with_description_and_variants():
+    guidelines = {
+        "logo": {
+            "required": True,
+            "description": "White wordmark with a leaf icon",
+            "variants": ["primary", "monochrome"],
+        }
+    }
+
+    assert get_visual_guideline_ref_keys(guidelines) == {"LOGO-01"}
+    prompt = build_vision_user_content(
+        draft_text="Draft",
+        purpose="Campaign",
+        channel="Web",
+        visual_guidelines=guidelines,
+        asset_ids=[str(uuid4())],
+        nonce="logo-test",
+    )
+    assert "[LOGO | REF_KEY: LOGO-01]" in prompt
+    assert "White wordmark with a leaf icon" in prompt
+    assert "monochrome" in prompt

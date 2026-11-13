@@ -4,7 +4,6 @@ import { getSupabaseClient } from '../../lib/supabase'
 import type { SessionUser, AppRole } from './types'
 import { resolveUserContext } from './userRole'
 
-const supabase = getSupabaseClient()
 
 /** Current session state (internal). */
 let currentSession: SessionUser | null = null
@@ -51,7 +50,7 @@ export async function initializeSession(): Promise<SessionUser | null> {
   const {
     data: { session },
     error,
-  } = await supabase.auth.getSession()
+  } = await getSupabaseClient().auth.getSession()
 
   // A newer auth transition may have happened while getSession was pending.
   if (generation !== getCurrentGeneration()) {
@@ -170,7 +169,7 @@ export async function signInWithEmail(
   email: string,
   password: string,
 ): Promise<{ error: string | null }> {
-  const { error } = await supabase.auth.signInWithPassword({
+  const { error } = await getSupabaseClient().auth.signInWithPassword({
     email,
     password,
   })
@@ -196,7 +195,7 @@ export async function signInWithEmail(
 export async function signInWithOAuth(
   provider: 'google' | 'github',
 ): Promise<{ error: string | null }> {
-  const { error } = await supabase.auth.signInWithOAuth({
+  const { error } = await getSupabaseClient().auth.signInWithOAuth({
     provider,
     options: {
       redirectTo: `${window.location.origin}/auth/callback`,
@@ -208,7 +207,7 @@ export async function signInWithOAuth(
 
 /** Sign out the current user. */
 export async function signOut(): Promise<{ error: string | null }> {
-  const { error } = await supabase.auth.signOut()
+  const { error } = await getSupabaseClient().auth.signOut()
 
   if (error) {
     return { error: error.message }
@@ -227,7 +226,7 @@ export async function signOut(): Promise<{ error: string | null }> {
 export async function getAccessToken(): Promise<string | null> {
   const {
     data: { session },
-  } = await supabase.auth.getSession()
+  } = await getSupabaseClient().auth.getSession()
 
   return session?.access_token || null
 }
@@ -243,7 +242,7 @@ export function onAuthStateChange(
 
   const {
     data: { subscription },
-  } = supabase.auth.onAuthStateChange((event, session) => {
+  } = getSupabaseClient().auth.onAuthStateChange((event, session) => {
     if (!mounted) return
 
     // Keep the external callback synchronous.

@@ -365,4 +365,6 @@ async def run_visual_analysis(
         approved_logo_hashes=approved_logo_hashes,
         provider_visual_guidelines=provider_visual_guidelines,
         placeholder_map=placeholder_map,
+        provider_request_override=provider_request_override,
+        expected_asset_checksums=expected_asset_checksums,
     )

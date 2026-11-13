@@ -1,19 +1,24 @@
 """FastAPI application entry point."""
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
 from app.api.reviews import router as reviews_router
 from app.api.imports import router as imports_router
 from app.api.kits import router as kits_router
+from app.api.confidentiality import router as confidentiality_router
+from app.api.guideline_analytics import router as guideline_analytics_router
 from app.api.middleware import RequestIdMiddleware
 from app.core.config import get_settings
 from app.core.errors import (
     AppException,
     app_exception_handler,
     generic_exception_handler,
-    map_db_exception,
+    http_exception_handler,
+    request_validation_exception_handler,
 )
 from app.store.db import get_db_pool, close_db_pool
 
@@ -45,7 +50,7 @@ def create_app() -> FastAPI:
         # Preview deployments use both branch aliases and immutable deployment URLs.
         allow_origin_regex=r"^https://anchordraft(?:-[a-z0-9-]+)?-siddharthaog\.vercel\.app$",
         allow_credentials=True,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "OPTIONS"],
         allow_headers=["X-Request-Id", "Authorization", "Content-Type"],
         expose_headers=["X-Request-Id"],
     )
@@ -56,6 +61,8 @@ def create_app() -> FastAPI:
 
     # Exception handlers
     app.add_exception_handler(AppException, app_exception_handler)
+    app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+    app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
     app.add_exception_handler(Exception, generic_exception_handler)
 
     # Include routers
@@ -63,6 +70,8 @@ def create_app() -> FastAPI:
     app.include_router(reviews_router, prefix="/v1")
     app.include_router(imports_router, prefix="/v1")
     app.include_router(kits_router, prefix="/v1")
+    app.include_router(confidentiality_router, prefix="/v1")
+    app.include_router(guideline_analytics_router, prefix="/v1")
 
     return app
 

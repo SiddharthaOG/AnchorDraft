@@ -3,11 +3,31 @@
 import { getSupabaseClient } from './supabase';
 import type { SessionUser } from '../features/auth/types';
 
-const supabase = getSupabaseClient();
+
 
 // ============================================================
 // Type definitions matching database schema
 // ============================================================
+
+export interface VisualGuidelines {
+  logo?: {
+    required?: boolean;
+    description?: string;
+    variants?: string[];
+    clear_space_ratio?: number;
+    min_size_px?: number;
+  };
+  palette?: {
+    colors: Array<{ name: string; hex: string }>;
+    tolerance?: number;
+    allow_neutrals?: boolean;
+  };
+  contrast?: {
+    min_ratio?: number;
+    level?: 'AA' | 'AAA';
+    ignore_backgrounds?: string[];
+  };
+}
 
 export interface BrandKit {
   id: string;
@@ -19,6 +39,7 @@ export interface BrandKit {
   created_by: string;
   created_at: string;
   activated_at: string | null;
+  visual_guidelines?: VisualGuidelines | null;
 }
 
 export interface Rule {
@@ -150,7 +171,7 @@ export async function getCurrentOrgId(session: SessionUser | null): Promise<stri
 // ============================================================
 
 export async function getActiveKit(orgId: string): Promise<BrandKit | null> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('brand_kits')
     .select('*')
     .eq('org_id', orgId)
@@ -164,7 +185,7 @@ export async function getActiveKit(orgId: string): Promise<BrandKit | null> {
 }
 
 export async function getBrandKits(orgId: string): Promise<BrandKit[]> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('brand_kits')
     .select('*')
     .eq('org_id', orgId)
@@ -177,7 +198,7 @@ export async function getBrandKits(orgId: string): Promise<BrandKit[]> {
 }
 
 export async function getKitRules(kitId: string): Promise<Rule[]> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('rules')
     .select('*')
     .eq('kit_id', kitId)
@@ -190,7 +211,7 @@ export async function getKitRules(kitId: string): Promise<Rule[]> {
 }
 
 export async function getKitFacts(kitId: string): Promise<ApprovedFact[]> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('approved_facts')
     .select('*')
     .eq('kit_id', kitId)
@@ -234,7 +255,7 @@ export async function getKitStats(orgId: string): Promise<KitStats> {
 // ============================================================
 
 export async function getContents(orgId: string, status?: Content['status']): Promise<Content[]> {
-  let query = supabase
+  let query = getSupabaseClient()
     .from('contents')
     .select('*')
     .eq('org_id', orgId)
@@ -268,7 +289,7 @@ export async function getLatestRevision(contentId: string): Promise<Revision | n
   // Query the base table so the result has the complete Revision contract,
   // including `id`. v_latest_revision exposes this column as `revision_id`,
   // which previously leaked through as a Revision with an undefined `id`.
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('revisions')
     .select('*')
     .eq('content_id', contentId)
@@ -283,7 +304,7 @@ export async function getLatestRevision(contentId: string): Promise<Revision | n
 }
 
 export async function getRevisions(contentId: string): Promise<Revision[]> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('revisions')
     .select('*')
     .eq('content_id', contentId)
@@ -300,7 +321,7 @@ export async function getRevisions(contentId: string): Promise<Revision[]> {
 // ============================================================
 
 export async function getLatestReviewForRevision(revisionId: string): Promise<Review | null> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('reviews')
     .select('*')
     .eq('revision_id', revisionId)
@@ -315,7 +336,7 @@ export async function getLatestReviewForRevision(revisionId: string): Promise<Re
 }
 
 export async function getReview(reviewId: string): Promise<Review | null> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('reviews')
     .select('*')
     .eq('id', reviewId)
@@ -328,7 +349,7 @@ export async function getReview(reviewId: string): Promise<Review | null> {
 }
 
 export async function getFindingsForReview(reviewId: string): Promise<Finding[]> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('findings')
     .select('*')
     .eq('review_id', reviewId)
@@ -341,7 +362,7 @@ export async function getFindingsForReview(reviewId: string): Promise<Finding[]>
 }
 
 export async function getFindingsWithDecisionsForReview(reviewId: string): Promise<FindingWithDecision[]> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('v_finding_state')
     .select('*')
     .eq('review_id', reviewId)
@@ -362,7 +383,7 @@ export async function getPendingSignoffs(contentId: string): Promise<Array<{
   explanation: string;
   needs_human: boolean;
 }>> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('v_pending_signoffs')
     .select('finding_id, ref_key, category, severity, quote, explanation, needs_human')
     .eq('content_id', contentId);
@@ -385,7 +406,7 @@ export interface PendingSignoff {
 }
 
 export async function getPendingSignoffsByOrg(orgId: string): Promise<PendingSignoff[]> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('v_pending_signoffs')
     .select('finding_id, content_id, ref_key, category, severity, quote, explanation, needs_human')
     .eq('org_id', orgId);
@@ -412,7 +433,7 @@ export interface RuleStat {
 }
 
 export async function getRuleStats(orgId: string): Promise<RuleStat[]> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('v_rule_stats')
     .select('*')
     .eq('org_id', orgId)
@@ -433,7 +454,7 @@ export interface ContentStatusDistribution {
 }
 
 export async function getContentStatusDistribution(orgId: string): Promise<ContentStatusDistribution> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('contents')
     .select('status')
     .eq('org_id', orgId);
@@ -486,7 +507,7 @@ export interface ReviewMetrics {
 }
 
 export async function getReviewMetrics(orgId: string): Promise<ReviewMetrics> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('reviews')
     .select('status, llm_status, llm_findings_raw, llm_findings_dropped')
     .eq('org_id', orgId);
@@ -562,7 +583,7 @@ export interface FindingInsights {
 }
 
 export async function getFindingInsights(orgId: string): Promise<FindingInsights> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('v_finding_state')
     .select('*')
     .eq('org_id', orgId);
@@ -642,7 +663,7 @@ export async function createContent(
   purpose: string,
   body: string
 ): Promise<CreateContentResult> {
-  const { data, error } = await supabase.rpc('create_content', {
+  const { data, error } = await getSupabaseClient().rpc('create_content', {
     _org: orgId,
     _title: title,
     _channel: channel,
@@ -665,7 +686,7 @@ export async function createRevision(
   contentId: string,
   body: string
 ): Promise<CreateRevisionResult> {
-  const { data, error } = await supabase.rpc('create_revision', {
+  const { data, error } = await getSupabaseClient().rpc('create_revision', {
     _content_id: contentId,
     _body: body,
   });
@@ -692,7 +713,7 @@ export async function recordDecision(
   reason?: string,
   editedText?: string
 ): Promise<RecordDecisionResult> {
-  const { data, error } = await supabase.rpc('record_decision', {
+  const { data, error } = await getSupabaseClient().rpc('record_decision', {
     _finding_id: findingId,
     _action: action,
     _reason: reason || null,
@@ -713,7 +734,7 @@ export interface ApplyDecisionsResult {
 }
 
 export async function applyDecisions(contentId: string): Promise<ApplyDecisionsResult> {
-  const { data, error } = await supabase.rpc('apply_decisions', {
+  const { data, error } = await getSupabaseClient().rpc('apply_decisions', {
     _content_id: contentId,
   });
 
@@ -724,7 +745,7 @@ export async function applyDecisions(contentId: string): Promise<ApplyDecisionsR
 }
 
 export async function submitContent(contentId: string): Promise<void> {
-  const { error } = await supabase.rpc('submit_content', {
+  const { error } = await getSupabaseClient().rpc('submit_content', {
     _content_id: contentId,
   });
 
@@ -734,7 +755,7 @@ export async function submitContent(contentId: string): Promise<void> {
 }
 
 export async function requestChanges(contentId: string, note: string): Promise<void> {
-  const { error } = await supabase.rpc('request_changes', {
+  const { error } = await getSupabaseClient().rpc('request_changes', {
     _content_id: contentId,
     _note: note,
   });
@@ -749,7 +770,7 @@ export async function recordSignoff(
   action: 'signoff' | 'reject_claim',
   note?: string
 ): Promise<void> {
-  const { error } = await supabase.rpc('record_signoff', {
+  const { error } = await getSupabaseClient().rpc('record_signoff', {
     _finding_id: findingId,
     _action: action,
     _note: note || null,
@@ -761,7 +782,7 @@ export async function recordSignoff(
 }
 
 export async function approveContent(contentId: string): Promise<void> {
-  const { error } = await supabase.rpc('approve_content', {
+  const { error } = await getSupabaseClient().rpc('approve_content', {
     _content_id: contentId,
   });
 
@@ -776,7 +797,7 @@ export interface CloneKitResult {
 }
 
 export async function cloneKit(kitId: string): Promise<CloneKitResult> {
-  const { data, error } = await supabase.rpc('clone_kit', {
+  const { data, error } = await getSupabaseClient().rpc('clone_kit', {
     _kit_id: kitId,
   });
 
@@ -787,7 +808,7 @@ export async function cloneKit(kitId: string): Promise<CloneKitResult> {
 }
 
 export async function activateKit(kitId: string): Promise<void> {
-  const { error } = await supabase.rpc('activate_kit', {
+  const { error } = await getSupabaseClient().rpc('activate_kit', {
     _kit_id: kitId,
   });
 
@@ -849,8 +870,9 @@ export class ReviewEngineError extends Error {
     public readonly originalError?: Error,
     public readonly reason?: string,
     public readonly retryAfterSeconds?: number,
+    public readonly requestId?: string,
   ) {
-    super(message);
+    super(requestId ? `${message} (Reference ID: ${requestId})` : message);
     this.name = 'ReviewEngineError';
   }
 }
@@ -859,6 +881,7 @@ function getApiErrorDetails(payload: unknown): {
   message?: string;
   reason?: string;
   retryAfterSeconds?: number;
+  requestId?: string;
 } {
   if (!payload || typeof payload !== 'object') return {};
   const body = payload as Record<string, unknown>;
@@ -891,20 +914,23 @@ function getApiErrorDetails(payload: unknown): {
     ?? (validationMessage ? `Request validation failed: ${validationMessage}` : undefined);
   const rawRetryAfter = apiError?.retry_after_seconds ?? detail?.retry_after_seconds;
   const rawReason = apiError?.reason ?? detail?.code ?? (validationIssues.length ? 'request_validation_error' : undefined);
+  const rawRequestId = apiError?.request_id;
 
   return {
     message: typeof rawMessage === 'string' ? rawMessage : undefined,
     reason: typeof rawReason === 'string' ? rawReason : undefined,
     retryAfterSeconds: typeof rawRetryAfter === 'number' ? rawRetryAfter : undefined,
+    requestId: typeof rawRequestId === 'string' ? rawRequestId : undefined,
   };
 }
 
 async function postReviewApi<T>(path: string, body: Record<string, unknown>, validate: (data: unknown) => data is T): Promise<T> {
-  const token = await getAuthToken();
+  const requestId = crypto.randomUUID();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 90000);
 
   try {
+    const token = await getAuthToken();
     const response = await fetch(getEngineUrl() + path, {
       method: 'POST',
       signal: controller.signal,
@@ -912,7 +938,7 @@ async function postReviewApi<T>(path: string, body: Record<string, unknown>, val
       headers: {
         Authorization: 'Bearer ' + token,
         'Content-Type': 'application/json',
-        'X-Request-Id': crypto.randomUUID(),
+        'X-Request-Id': requestId,
       },
       body: JSON.stringify(body),
     });
@@ -927,23 +953,27 @@ async function postReviewApi<T>(path: string, body: Record<string, unknown>, val
         undefined,
         apiError.reason,
         apiError.retryAfterSeconds,
+        apiError.requestId || response.headers?.get?.('X-Request-Id') || requestId,
       );
     }
 
     const data: unknown = await response.json();
     if (!validate(data)) {
-      throw new ReviewEngineError('Invalid review API response shape', 500);
+      throw new ReviewEngineError('Invalid review API response shape', 500, undefined, undefined, undefined, requestId);
     }
     return data;
   } catch (err) {
     if (err instanceof ReviewEngineError) throw err;
     if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new ReviewEngineError('Review request timeout after 90s', 504, err);
+      throw new ReviewEngineError('Review request timeout after 90s', 504, err, undefined, undefined, requestId);
     }
     throw new ReviewEngineError(
       err instanceof Error ? err.message : 'Network error',
       0,
       err instanceof Error ? err : undefined,
+      undefined,
+      undefined,
+      requestId,
     );
   } finally {
     clearTimeout(timeoutId);
@@ -1001,11 +1031,66 @@ export async function confirmReviewPreview(
 
 // Shared auth token getter for engine API calls
 async function getAuthToken(): Promise<string> {
-  const { data, error } = await supabase.auth.getSession();
+  const { data, error } = await getSupabaseClient().auth.getSession();
   if (error || !data?.session?.access_token) {
     throw new ReviewEngineError('No valid session', 401);
   }
   return data.session.access_token;
+}
+
+
+export async function updateKitVisualGuidelines(
+  kitId: string,
+  visualGuidelines: VisualGuidelines,
+): Promise<VisualGuidelines> {
+  const token = await getAuthToken();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await fetch(getEngineUrl() + '/v1/kits/' + encodeURIComponent(kitId) + '/visual-guidelines', {
+      method: 'PUT',
+      signal: controller.signal,
+      cache: 'no-store',
+      headers: {
+        Authorization: 'Bearer ' + token,
+        'Content-Type': 'application/json',
+        'X-Request-Id': crypto.randomUUID(),
+      },
+      body: JSON.stringify({ visual_guidelines: visualGuidelines }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const apiError = getApiErrorDetails(errorData);
+      throw new ReviewEngineError(
+        apiError.message || ('Visual guideline update failed: ' + response.status + ' ' + response.statusText),
+        response.status,
+        undefined,
+        apiError.reason,
+        apiError.retryAfterSeconds,
+      );
+    }
+    const data: unknown = await response.json();
+    if (!data || typeof data !== 'object' || !('visual_guidelines' in data)) {
+      throw new ReviewEngineError('The visual guideline update response was invalid.', 500);
+    }
+    const saved = (data as { visual_guidelines: unknown }).visual_guidelines;
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+      throw new ReviewEngineError('The saved visual guidelines were invalid.', 500);
+    }
+    return saved as VisualGuidelines;
+  } catch (err) {
+    if (err instanceof ReviewEngineError) throw err;
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new ReviewEngineError('Visual guideline update timed out.', 504, err);
+    }
+    throw new ReviewEngineError(
+      err instanceof Error ? err.message : 'Network error',
+      0,
+      err instanceof Error ? err : undefined,
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 // ============================================================
@@ -1039,8 +1124,10 @@ export class KitLintError extends Error {
     message: string,
     public readonly status: number,
     public readonly originalError?: Error,
+    public readonly reason?: string,
+    public readonly requestId?: string,
   ) {
-    super(message);
+    super(requestId ? `${message} (Reference ID: ${requestId})` : message);
     this.name = 'KitLintError';
   }
 }
@@ -1061,6 +1148,136 @@ function getEngineUrl(): string {
 }
 
 export { getEngineUrl };
+
+export interface GuidelineReasonCluster {
+  theme: string;
+  count: number;
+  examples: string[];
+  qualifies: boolean;
+}
+
+export interface GuidelineSuggestion {
+  id: string;
+  rule_key: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'stale';
+  suggested_text: string;
+  explanation: string;
+  source_kit_version: number;
+  created_at: string;
+  accepted_kit_id: string | null;
+  provider?: string | null;
+  model?: string | null;
+}
+
+export interface GuidelineGapRule {
+  rule_key: string;
+  category: string;
+  title: string;
+  guideline_text: string;
+  decided: number;
+  dismissed: number;
+  acted_on: number;
+  dismissal_rate: number;
+  reason_clusters: GuidelineReasonCluster[];
+  source_versions: number[];
+  is_gap: boolean;
+  suggestion: GuidelineSuggestion | null;
+}
+
+export interface GuidelineGapAnalytics {
+  kit: { id: string; version: number; name: string } | null;
+  rules: GuidelineGapRule[];
+  gaps: GuidelineGapRule[];
+}
+
+export interface GuidelineSuggestionPreview {
+  preview_id: string;
+  confirmation_token: string;
+  expires_at: string;
+  payload_sha256: string;
+  system_instruction: string;
+  user_content: string;
+  redaction_summary: {
+    total_matches: number;
+    by_type: Record<string, number>;
+    original_chars: number;
+    redacted_chars: number;
+    policy_version: number;
+  };
+}
+
+export interface GeneratedGuidelineSuggestion {
+  id: string;
+  status: 'pending';
+  rule_key: string;
+  suggested_text: string;
+  explanation: string;
+  source_kit_version: number;
+  created_at: string;
+  model: string;
+}
+
+async function guidelineAnalyticsRequest<T>(path: string, method: 'GET' | 'POST', body?: Record<string, unknown>): Promise<T> {
+  const token = await getAuthToken();
+  const response = await fetch(getEngineUrl() + path, {
+    method,
+    cache: 'no-store',
+    headers: {
+      Authorization: 'Bearer ' + token,
+      'Content-Type': 'application/json',
+      'X-Request-Id': crypto.randomUUID(),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = payload && typeof payload === 'object' ? (payload as Record<string, unknown>).detail : undefined;
+    const nested = detail && typeof detail === 'object' ? (detail as Record<string, unknown>).error : undefined;
+    const message = nested && typeof nested === 'object' && typeof (nested as Record<string, unknown>).message === 'string'
+      ? (nested as Record<string, unknown>).message as string
+      : 'Guideline analytics request failed (' + response.status + ')';
+    throw new Error(message);
+  }
+  return payload as T;
+}
+
+export async function getGuidelineGapAnalytics(): Promise<GuidelineGapAnalytics> {
+  return guidelineAnalyticsRequest<GuidelineGapAnalytics>('/v1/analytics/guideline-gaps', 'GET');
+}
+
+export async function createGuidelineSuggestionPreview(ruleKey: string): Promise<GuidelineSuggestionPreview> {
+  return guidelineAnalyticsRequest<GuidelineSuggestionPreview>(
+    '/v1/analytics/guideline-gaps/' + encodeURIComponent(ruleKey) + '/suggestion-preview',
+    'POST',
+  );
+}
+
+export async function confirmGuidelineSuggestionPreview(
+  previewId: string,
+  confirmationToken: string,
+): Promise<GeneratedGuidelineSuggestion> {
+  return guidelineAnalyticsRequest<GeneratedGuidelineSuggestion>(
+    '/v1/analytics/suggestion-previews/' + encodeURIComponent(previewId) + '/confirm',
+    'POST',
+    { confirmation_token: confirmationToken },
+  );
+}
+
+export async function acceptGuidelineSuggestion(suggestionId: string): Promise<{ status: string; kit_id: string; version: number }> {
+  return guidelineAnalyticsRequest(
+    '/v1/analytics/suggestions/' + encodeURIComponent(suggestionId) + '/accept',
+    'POST',
+  );
+}
+
+export async function rejectGuidelineSuggestion(suggestionId: string, reason?: string): Promise<{ status: string }> {
+  return guidelineAnalyticsRequest(
+    '/v1/analytics/suggestions/' + encodeURIComponent(suggestionId) + '/reject',
+    'POST',
+    { reason: reason || null },
+  );
+}
+
 
 export interface VisualAssetUploadResponse {
   asset_id: string;
@@ -1121,23 +1338,24 @@ export async function uploadVisualAsset(
     throw new ReviewEngineError('The file extension or browser media type does not match the image contents.', 415);
   }
 
-  const token = await getAuthToken();
-  const formData = new FormData();
-  // Set a trusted, signature-verified MIME type even when the browser leaves File.type blank.
-  formData.append('file', file.slice(0, file.size, mimeType), file.name);
-  formData.append('content_id', contentId);
-  formData.append('revision_id', revisionId);
-
+  const requestId = crypto.randomUUID();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 120000);
   try {
+    const token = await getAuthToken();
+    const formData = new FormData();
+    // Set a trusted, signature-verified MIME type even when the browser leaves File.type blank.
+    formData.append('file', file.slice(0, file.size, mimeType), file.name);
+    formData.append('content_id', contentId);
+    formData.append('revision_id', revisionId);
+
     const response = await fetch(`${getEngineUrl()}/v1/imports/visual`, {
       method: 'POST',
       signal: controller.signal,
       cache: 'no-store',
       headers: {
         Authorization: `Bearer ${token}`,
-        'X-Request-Id': crypto.randomUUID(),
+        'X-Request-Id': requestId,
       },
       // Do not set Content-Type: the browser must add the multipart boundary.
       body: formData,
@@ -1152,23 +1370,27 @@ export async function uploadVisualAsset(
         undefined,
         apiError.reason,
         apiError.retryAfterSeconds,
+        apiError.requestId || response.headers?.get?.('X-Request-Id') || requestId,
       );
     }
 
     const data: unknown = await response.json();
     if (!isVisualAssetUploadResponse(data)) {
-      throw new ReviewEngineError('The image upload response was invalid.', 500);
+      throw new ReviewEngineError('The image upload response was invalid.', 500, undefined, undefined, undefined, requestId);
     }
     return data;
   } catch (err) {
     if (err instanceof ReviewEngineError) throw err;
     if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new ReviewEngineError('Image upload timed out after 120 seconds.', 504, err);
+      throw new ReviewEngineError('Image upload timed out after 120 seconds.', 504, err, undefined, undefined, requestId);
     }
     throw new ReviewEngineError(
       err instanceof Error ? err.message : 'Image upload failed due to a network error.',
       0,
       err instanceof Error ? err : undefined,
+      undefined,
+      undefined,
+      requestId,
     );
   } finally {
     clearTimeout(timeoutId);
@@ -1176,18 +1398,19 @@ export async function uploadVisualAsset(
 }
 
 export async function lintKit(kitId: string): Promise<KitLintResponse> {
-  const token = await getAuthToken();
+  const requestId = crypto.randomUUID();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 60000);
 
   try {
+    const token = await getAuthToken();
     const response = await fetch(`${getEngineUrl()}/v1/kits/${kitId}/lint`, {
       method: 'POST',
       signal: controller.signal,
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
-        'X-Request-Id': crypto.randomUUID(),
+        'X-Request-Id': requestId,
       },
     });
 
@@ -1195,26 +1418,32 @@ export async function lintKit(kitId: string): Promise<KitLintResponse> {
       const errorData = await response.json().catch(() => ({}));
       const apiError = getApiErrorDetails(errorData);
       const message = apiError.message || `Lint failed: ${response.status} ${response.statusText}`;
-      throw new KitLintError(message, response.status);
+      throw new KitLintError(
+        message,
+        response.status,
+        undefined,
+        apiError.reason,
+        apiError.requestId || response.headers?.get?.('X-Request-Id') || requestId,
+      );
     }
 
     const data = (await response.json()) as KitLintResponse;
-
-    // Validate response shape
     if (typeof data.ok !== 'boolean' || !Array.isArray(data.issues) || !data.stats) {
-      throw new KitLintError('Invalid lint response shape', 500);
+      throw new KitLintError('Invalid lint response shape', 500, undefined, undefined, requestId);
     }
 
     return data;
   } catch (err) {
-    if (err instanceof KitLintError) throw err;
+    if (err instanceof KitLintError || err instanceof ReviewEngineError) throw err;
     if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new KitLintError('Lint request timeout after 60s', 504, err);
+      throw new KitLintError('Lint request timeout after 60s', 504, err, undefined, requestId);
     }
     throw new KitLintError(
       err instanceof Error ? err.message : 'Network error',
       0,
       err instanceof Error ? err : undefined,
+      undefined,
+      requestId,
     );
   } finally {
     clearTimeout(timeoutId);
@@ -1240,7 +1469,7 @@ export interface CreateRuleInput {
 }
 
 export async function createRule(input: CreateRuleInput): Promise<Rule> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('rules')
     .insert(input)
     .select()
@@ -1266,7 +1495,7 @@ export interface UpdateRuleInput {
 }
 
 export async function updateRule(ruleId: string, input: UpdateRuleInput): Promise<Rule> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('rules')
     .update(input)
     .eq('id', ruleId)
@@ -1280,7 +1509,7 @@ export async function updateRule(ruleId: string, input: UpdateRuleInput): Promis
 }
 
 export async function deleteRule(ruleId: string): Promise<void> {
-  const { error } = await supabase
+  const { error } = await getSupabaseClient()
     .from('rules')
     .delete()
     .eq('id', ruleId);
@@ -1303,7 +1532,7 @@ export interface CreateFactInput {
 }
 
 export async function createFact(input: CreateFactInput): Promise<ApprovedFact> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('approved_facts')
     .insert(input)
     .select()
@@ -1323,7 +1552,7 @@ export interface UpdateFactInput {
 }
 
 export async function updateFact(factId: string, input: UpdateFactInput): Promise<ApprovedFact> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('approved_facts')
     .update(input)
     .eq('id', factId)
@@ -1337,7 +1566,7 @@ export async function updateFact(factId: string, input: UpdateFactInput): Promis
 }
 
 export async function deleteFact(factId: string): Promise<void> {
-  const { error } = await supabase
+  const { error } = await getSupabaseClient()
     .from('approved_facts')
     .delete()
     .eq('id', factId);

@@ -186,3 +186,18 @@ After running migrations and seed scripts, verify:
 - [ ] Core seed data (organization) inserts without conflicts
 - [ ] Seed scripts execute successfully with actual Auth user UUIDs
 - [ ] Row counts match expected values (see table above)
+
+## Recent shared-project migrations
+
+The following migrations have been applied to the shared AnchorDraft Supabase project. Their timestamps match the recorded migration history; keep these filenames stable across feature branches.
+
+| Version | File | Description |
+|---|---|---|
+| 20261112154040 | `20261112154040_confidentiality_policy_owner_only_select.sql` | Restrict direct confidentiality policy reads to organization owners |
+| 20261112154103 | `20261112154103_inherit_visual_guidelines_on_clone.sql` | Inherit visual guidelines when a kit version is cloned |
+| 20261112154124 | `20261112154124_guideline_gap_analytics.sql` | Suggestion and preview tables, manager/owner RLS, serialized kit cloning, service-only accept/reject RPCs |
+| 20261112154153 | `20261112154153_guideline_gap_analytics_fk_indexes.sql` | Index foreign keys introduced by guideline-gap analytics |
+
+The three feature migrations above have been applied to the shared project. The final index migration was also applied and committed with the analytics feature. Do not reapply these schema changes manually; use the migration history and standard Supabase migration tooling to keep environments aligned.
+
+The shared database is used by both the production and staging Render services. Feature branches must therefore be validated against test-safe data and must not assume database isolation.

@@ -485,3 +485,98 @@ class TestKitLintLimits:
         
         error_codes = [i["code"] for i in result["issues"] if i["severity"] == "error"]
         assert "TOO_MANY_REQUIRE_ANY_TERMS" in error_codes
+
+    @pytest.mark.asyncio
+    async def test_lint_rejects_invalid_visual_guidelines(self, mock_supabase, auth_user, kit_id):
+        from app.api.kits import lint_kit
+
+        self._setup_valid_kit(mock_supabase, kit_id, [], [])
+        mock_supabase.get_kit.return_value["visual_guidelines"] = {
+            "palette": {"colors": [{"name": "Primary", "hex": "not-a-color"}]}
+        }
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert result["ok"] is False
+        issue = next(item for item in result["issues"] if item["code"] == "INVALID_VISUAL_GUIDELINES")
+        assert issue["severity"] == "error"
+        assert issue["message"] == "Visual brand guidelines contain invalid configuration"
+
+
+    @pytest.mark.asyncio
+    async def test_lint_accepts_legacy_deterministic_configs(self, mock_supabase, auth_user, kit_id):
+        """Existing seeded kits omit config.check but have unambiguous shapes."""
+        from app.api.kits import lint_kit
+
+        rules = [
+            {
+                "rule_key": "TERM-01", "category": "terminology", "severity": "low",
+                "title": "Prefer use", "guideline_text": "Prefer use over utilize",
+                "check_kind": "deterministic",
+                "config": {"entries": [{"avoid": ["utilize"], "prefer": "use"}]},
+                "needs_reviewer": False,
+            },
+            {
+                "rule_key": "TERM-02", "category": "terminology", "severity": "low",
+                "title": "Prefer use", "guideline_text": "Prefer use over leverage",
+                "check_kind": "deterministic",
+                "config": {"entries": [{"avoid": ["leverage"], "prefer": "use"}]},
+                "needs_reviewer": False,
+            },
+            {
+                "rule_key": "TERM-03", "category": "terminology", "severity": "low",
+                "title": "Prefer help", "guideline_text": "Prefer help over facilitate",
+                "check_kind": "deterministic",
+                "config": {"entries": [{"avoid": ["facilitate"], "prefer": "help"}]},
+                "needs_reviewer": False,
+            },
+            {
+                "rule_key": "TERM-04", "category": "terminology", "severity": "low",
+                "title": "Avoid synergy", "guideline_text": "Avoid synergy",
+                "check_kind": "deterministic",
+                "config": {"phrases": ["synergy", "synergistic"]},
+                "needs_reviewer": False,
+            },
+            {
+                "rule_key": "TERM-05", "category": "terminology", "severity": "medium",
+                "title": "Avoid disrupt", "guideline_text": "Avoid disrupt",
+                "check_kind": "deterministic",
+                "config": {"phrases": ["disrupt", "disruptive", "disruption"]},
+                "needs_reviewer": False,
+            },
+            {
+                "rule_key": "A11Y-01", "category": "accessibility", "severity": "high",
+                "title": "Meaningful alt text", "guideline_text": "Images need meaningful alt text",
+                "check_kind": "deterministic",
+                "config": {"min_length": 5, "generic": ["image", "photo", "picture", "screenshot", "diagram"]},
+                "needs_reviewer": False,
+            },
+        ]
+        self._setup_valid_kit(mock_supabase, kit_id, rules, [])
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert result["ok"] is True
+        assert not [issue for issue in result["issues"] if issue["code"] == "UNKNOWN_CHECK_TYPE"]
+        assert [rule["config"]["check"] for rule in rules] == [
+            "term_map", "term_map", "term_map", "phrase_list", "phrase_list", "missing_alt_text"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_lint_rejects_ambiguous_legacy_deterministic_config(self, mock_supabase, auth_user, kit_id):
+        from app.api.kits import lint_kit
+
+        rules = [{
+            "rule_key": "RULE-01", "category": "terminology", "severity": "medium",
+            "title": "Ambiguous", "guideline_text": "Ambiguous legacy config",
+            "check_kind": "deterministic",
+            "config": {"entries": [], "phrases": []},
+            "needs_reviewer": False,
+        }]
+        self._setup_valid_kit(mock_supabase, kit_id, rules, [])
+
+        result = await lint_kit(kit_id=kit_id, user=auth_user)
+
+        assert result["ok"] is False
+        issue = next(item for item in result["issues"] if item["code"] == "UNKNOWN_CHECK_TYPE")
+        assert issue["ref_key"] == "RULE-01"

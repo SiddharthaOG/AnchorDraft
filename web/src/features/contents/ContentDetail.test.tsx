@@ -933,6 +933,27 @@ describe('ContentDetail', () => {
       ).toBeInTheDocument();
     });
 
+    it('does not briefly expose submission before findings finish loading', { timeout: 15000 }, async () => {
+      let resolveFindings!: (value: any[]) => void;
+      mockGetFindingsWithDecisionsForReview.mockImplementationOnce(() =>
+        new Promise(resolve => { resolveFindings = resolve; }),
+      );
+
+      await renderAndWaitForLoad(<ContentDetail />);
+
+      // The review status can arrive before its findings. Empty initial state
+      // must never be treated as a completed, zero-finding review.
+      expect(screen.queryByRole('button', { name: 'Submit for Review' })).not.toBeInTheDocument();
+
+      await act(async () => {
+        resolveFindings([]);
+      });
+
+      await waitFor(() => {
+        expect(screen.getAllByRole('button', { name: 'Submit for Review' })).toHaveLength(2);
+      });
+    });
+
     it('cannot submit when review has unresolved findings', { timeout: 15000 }, async () => {
       mockGetFindingsWithDecisionsForReview.mockResolvedValueOnce([
         {
@@ -969,8 +990,10 @@ describe('ContentDetail', () => {
         expect(screen.getByText(/Findings \(1\)/)).toBeInTheDocument();
       });
 
-      // Submit button should not be visible (findings not decided)
+      // Submission stays gated, but the creator must be told exactly what is blocking it.
       expect(screen.queryByRole('button', { name: 'Submit for Review' })).not.toBeInTheDocument();
+      expect(await screen.findByText('1 finding still needs a decision')).toBeInTheDocument();
+      expect(screen.getByText(/Choose Accept, Edit, or Dismiss for every finding/)).toBeInTheDocument();
     });
 
     it('cannot submit when review has pending accept/edit decisions', { timeout: 15000 }, async () => {
@@ -1039,11 +1062,11 @@ describe('ContentDetail', () => {
         needs_human: false,
         needs_reviewer: false,
         created_at: '2026-01-01T00:00:00Z',
-        last_action: null,
-        last_reason: null,
+        last_action: 'dismiss',
+        last_reason: 'Confirmed and dismissed for this test',
         last_edited_text: null,
         resulting_revision_id: null,
-        decided_at: null,
+        decided_at: '2026-01-01T00:01:00Z',
       };
 
       mockGetLatestReviewForRevision
@@ -1069,6 +1092,11 @@ describe('ContentDetail', () => {
       expect(await screen.findByText(/Findings \(1\)/)).toBeInTheDocument();
       expect(screen.getByText('Unsupported absolute guarantee')).toBeInTheDocument();
       expect(screen.queryByText('No findings were generated. You can submit this content for approval.')).not.toBeInTheDocument();
+      // The terminal poll must also mark the findings snapshot ready, so a
+      // fully decided review can become submittable after polling completes.
+      await waitFor(() => {
+        expect(screen.getAllByRole('button', { name: 'Submit for Review' })).toHaveLength(2);
+      });
     });
     it('cannot submit when review failed or unfinished', async () => {
       mockGetLatestReviewForRevision.mockResolvedValue({

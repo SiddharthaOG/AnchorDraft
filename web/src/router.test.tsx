@@ -108,6 +108,16 @@ function RoleRoute({ allowedRoles, children }: { allowedRoles: string[]; childre
   return children
 }
 
+function RoleDashboard() {
+  const { session } = useAuth()
+  const roles = session?.currentRoles ?? []
+  if (roles.includes('owner')) return <OwnerLanding />
+  if (roles.includes('reviewer')) return <ReviewerLanding />
+  if (roles.includes('manager')) return <ManagerLanding />
+  if (roles.includes('creator')) return <CreatorLanding />
+  return <NoAccess requiredRoles={['creator', 'manager', 'reviewer', 'owner']} />
+}
+
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { session, isLoading } = useAuth()
 
@@ -275,7 +285,7 @@ function TestRoutes() {
           index
           element={
             <RoleRoute allowedRoles={['creator', 'manager', 'reviewer', 'owner']}>
-              <CreatorLanding />
+              <RoleDashboard />
             </RoleRoute>
           }
         />
@@ -536,6 +546,54 @@ describe('Router', () => {
     // Layout should be rendered (AnchorDraft title visible)
     expect(screen.getByText('AnchorDraft')).toBeInTheDocument()
 
+    unmount()
+  })
+
+  it('renders ManagerLanding for authenticated manager at root /', async () => {
+    mockInitializeSession.mockResolvedValue({
+      user: { id: 'manager-1', email: 'manager@example.com' },
+      profile: { display_name: 'Test Manager' },
+      currentRoles: ['manager'],
+      organizations: [{ id: 'org-1', name: 'Test Org' }],
+      currentOrgId: 'org-1',
+      isLoading: false,
+      error: null,
+    } as any)
+
+    const { unmount } = await renderRouter('/')
+    await waitFor(() => expect(screen.getByTestId('manager-landing')).toBeInTheDocument())
+    unmount()
+  })
+
+  it('renders ReviewerLanding for authenticated reviewer at root /', async () => {
+    mockInitializeSession.mockResolvedValue({
+      user: { id: 'reviewer-1', email: 'reviewer@example.com' },
+      profile: { display_name: 'Test Reviewer' },
+      currentRoles: ['reviewer'],
+      organizations: [{ id: 'org-1', name: 'Test Org' }],
+      currentOrgId: 'org-1',
+      isLoading: false,
+      error: null,
+    } as any)
+
+    const { unmount } = await renderRouter('/')
+    await waitFor(() => expect(screen.getByTestId('reviewer-landing')).toBeInTheDocument())
+    unmount()
+  })
+
+  it('renders OwnerLanding for authenticated owner at root /, preferring owner over manager', async () => {
+    mockInitializeSession.mockResolvedValue({
+      user: { id: 'owner-1', email: 'owner@example.com' },
+      profile: { display_name: 'Test Owner' },
+      currentRoles: ['owner', 'manager'],
+      organizations: [{ id: 'org-1', name: 'Test Org' }],
+      currentOrgId: 'org-1',
+      isLoading: false,
+      error: null,
+    } as any)
+
+    const { unmount } = await renderRouter('/')
+    await waitFor(() => expect(screen.getByTestId('owner-landing')).toBeInTheDocument())
     unmount()
   })
 

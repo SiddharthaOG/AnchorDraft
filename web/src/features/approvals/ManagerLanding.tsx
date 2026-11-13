@@ -33,12 +33,9 @@ function StatCard({ label, value, icon, href }: StatCardProps) {
         </div>
       </div>
       {href && (
-        <Link
-          to={href}
-          className="mt-4 inline-flex items-center text-sm font-medium text-primary hover:text-primary-dark"
-        >
+        <span className="mt-4 inline-flex items-center text-sm font-medium text-primary">
           View all →
-        </Link>
+        </span>
       )}
     </div>
   );

@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useAuth } from '../../features/auth/AuthProvider';
 import { LoadingScreen } from '../../components/LoadingScreen';
+import { GuidelineGapPanel } from './GuidelineGapPanel';
 import {
   getContentStatusDistribution,
   getReviewMetrics,
@@ -245,6 +246,8 @@ export function InsightsLanding() {
           Understand review progress, brand rule effectiveness, and governance patterns.
         </p>
       </div>
+
+      <GuidelineGapPanel />
 
       {/* Overview cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

@@ -421,3 +421,21 @@ class TestRunDeterministicVisualChecks:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+def test_full_creative_logo_guidelines_are_not_compared_as_whole_image_hash():
+    image_bytes = create_test_image(100, 100, (255, 0, 0))
+    asset_id = UUID("11111111-1111-1111-1111-111111111111")
+
+    findings = run_deterministic_visual_checks(
+        asset_id=asset_id,
+        file_bytes=image_bytes,
+        mime_type="image/png",
+        guidelines=VisualGuideline(logo={
+            "required": True,
+            "description": "White wordmark with a leaf icon",
+            "variants": ["primary"],
+        }),
+        approved_logo_hashes=[],
+    )
+
+    assert not any(finding.ref_key.startswith("LOGO-") for finding in findings)

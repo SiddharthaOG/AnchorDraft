@@ -3,11 +3,11 @@
 import { getSupabaseClient } from '../../lib/supabase';
 import type { Membership, AppRole, UserProfile } from './types';
 
-const supabase = getSupabaseClient();
+
 
 /** Fetch all memberships for the current user. */
 export async function fetchUserMemberships(userId: string): Promise<Membership[]> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('memberships')
     .select('org_id, roles, user_id, created_at')
     .eq('user_id', userId);
@@ -20,7 +20,7 @@ export async function fetchUserMemberships(userId: string): Promise<Membership[]
 
 /** Fetch organization details by ID. */
 export async function fetchOrganization(orgId: string): Promise<{ id: string; name: string } | null> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('organizations')
     .select('id, name')
     .eq('id', orgId)
@@ -35,7 +35,7 @@ export async function fetchOrganization(orgId: string): Promise<{ id: string; na
 
 /** Fetch user profile. */
 export async function fetchUserProfile(userId: string): Promise<UserProfile | null> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('profiles')
     .select('user_id, display_name, created_at')
     .eq('user_id', userId)
