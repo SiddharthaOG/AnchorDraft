@@ -4,7 +4,7 @@ Python/FastAPI service responsible for authenticated API operations, organisatio
 
 ## Prerequisites
 
-- Python 3.11 or newer (deployment currently uses Python 3.12.10)
+- Python 3.11 or 3.12 (the project currently constrains Python to >=3.11,<3.13; deployment uses Python 3.12.10)
 - [uv](https://docs.astral.sh/uv/) recommended, or pip
 - A running PostgreSQL database
 - A Supabase project (local or hosted)
@@ -35,10 +35,12 @@ Use the connection string, API URL, anon key, and service-role key reported by `
 postgresql://postgres:postgres@127.0.0.1:55432/postgres
 ```
 
+Install the exact, committed dependency set from `uv.lock` and run the service. `--frozen` prevents uv from silently changing the lockfile during setup. Use `uv lock --check` to verify that `pyproject.toml` and `uv.lock` are in sync.
+
 Install dependencies and run the service:
 
 ```bash
-uv sync --extra test
+uv sync --frozen --extra test
 uv run uvicorn app.main:app --reload
 ```
 

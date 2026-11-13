@@ -11,7 +11,7 @@ Review content against organisation-specific brand rules, manage findings across
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 [![Vite](https://img.shields.io/badge/Vite-8-646CFF?style=flat-square&logo=vite)](https://vite.dev/)
 [![Supabase](https://img.shields.io/badge/Supabase-Postgres%20%2B%20Auth-3ECF8E?style=flat-square&logo=supabase)](https://supabase.com/)
-[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python)](https://python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776AB?style=flat-square&logo=python)](https://python.org/)
 
 [Live application](https://anchordraft.vercel.app/) · [API health](https://anchordraft.onrender.com/v1/health) · [Architecture](docs/ARCHITECTURE.md)
 
@@ -83,7 +83,7 @@ AnchorDraft/
 
 - Git
 - Node.js **22.x** (the frontend declares Node 22.x)
-- Python **3.11 or newer**; the deployed Render service is configured for Python 3.12.10
+- Python **3.11 or 3.12**; the deployed Render service is configured for Python 3.12.10
 - [uv](https://docs.astral.sh/uv/) (recommended for Python dependency management)
 - [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started)
 - Docker Desktop or another Docker-compatible runtime for the local Supabase stack
@@ -146,7 +146,7 @@ Use the actual values reported by your local Supabase CLI if they differ. The lo
 Install and run:
 
 ```bash
-uv sync --extra test
+uv sync --frozen --extra test
 uv run uvicorn app.main:app --reload
 ```
 

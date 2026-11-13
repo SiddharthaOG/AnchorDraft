@@ -110,7 +110,7 @@ class GeminiProvider:
             if not isinstance(obj, dict):
                 return obj
 
-            # The installed google-genai 0.3.x SDK models response_schema using
+            # The installed google-genai 0.8.x SDK models response_schema using
             # OpenAPI Schema, where nullable is a boolean rather than a JSON
             # Schema type union. Convert only the supported T|null form.
             if "type" in obj and isinstance(obj["type"], list):
