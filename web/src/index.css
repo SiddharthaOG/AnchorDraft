@@ -106,7 +106,7 @@ a { color: inherit; }
 .ad-page { width: 100%; max-width: 1500px; flex: 1; margin: 0 auto; padding: 39px clamp(22px,4vw,58px) 54px; }
 .ad-footer { display: flex; justify-content: space-between; gap: 20px; padding: 17px clamp(22px,4vw,58px); border-top: 1px solid var(--line); color: #96998e; font: 9px var(--mono); letter-spacing: .7px; }
 .ad-mobile-toggle,.ad-scrim { display: none; }
-.ad-route-transition { animation: ad-route-enter .32s cubic-bezier(.2,.7,.2,1) both; }
+.ad-route-transition { opacity: 1; animation: ad-route-enter .32s cubic-bezier(.2,.7,.2,1) both; }
 .ad-error-screen { min-height: 100vh; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; max-width: 620px; margin: 0 auto; padding: 48px 28px; }
 .ad-error-mark { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; background: #f5e9df; color: #98543b; font: 700 20px var(--display); }
 .ad-eyebrow { margin: 26px 0 10px; color: #78816f; font: 10px var(--mono); letter-spacing: 1.3px; }
@@ -122,7 +122,8 @@ a { color: inherit; }
 .ad-page :is(input,textarea,select):focus-visible { outline: 2px solid #b7d35b; outline-offset: 1px; border-color: #8ea64d; }
 .ad-page :is(button,a):focus-visible,.ad-sidebar :is(button,a):focus-visible { outline: 2px solid #9ebc4d; outline-offset: 3px; }
 
-@keyframes ad-route-enter { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
+/* Keep route content visible even when a background tab pauses its animation timeline. */
+@keyframes ad-route-enter { from { transform: translateY(7px); } to { transform: translateY(0); } }
 
 @media (max-width: 900px) {
   .ad-sidebar { transform: translateX(-100%); transition: transform .25s ease; box-shadow: 15px 0 45px #0002; }

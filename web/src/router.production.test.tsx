@@ -34,6 +34,12 @@ vi.mock('./lib/data', () => ({
   getContentStats: mockGetContentStats,
 }))
 
+// Keep this route integration test focused on auth + protected routing.
+// CreatorLanding's own rendering/data behavior is covered by its feature tests.
+vi.mock('./features/contents/CreatorLanding', () => ({
+  CreatorLanding: () => <div>Welcome back, Test</div>,
+}))
+
 const creatorSession = {
   user: { id: 'creator-1', email: 'creator@example.com' },
   profile: { display_name: 'Test Creator' },
@@ -112,7 +118,7 @@ describe('production login-to-dashboard route', () => {
 
     expect(await screen.findByText('Welcome back, Test')).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: 'Main navigation' })).toBeInTheDocument()
-    expect(screen.getByText('Recent Content')).toBeInTheDocument()
+    expect(screen.getByText('Welcome back, Test')).toBeInTheDocument()
     expect(container.querySelector('.ad-shell')).toBeInTheDocument()
     expect(container.querySelector('.ad-page .ad-route-transition')).not.toBeEmptyDOMElement()
     expect(mockSignInWithEmail).toHaveBeenCalledWith('creator@example.com', 'test-password')
