@@ -21,6 +21,7 @@ import {
   type BrandKit,
   type VisualGuidelines,
   updateKitVisualGuidelines,
+  updateKitName,
   type Rule,
   type ApprovedFact,
   type KitLintResponse,
@@ -650,6 +651,8 @@ export function KitDetail() {
   const [facts, setFacts] = useState<ApprovedFact[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [kitNameDraft, setKitNameDraft] = useState('');
+  const [isSavingKitName, setIsSavingKitName] = useState(false);
 
   // Editing state
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
@@ -714,6 +717,7 @@ export function KitDetail() {
       if (currentRequestId !== requestIdRef.current) return;
 
       setKit(currentKit);
+      setKitNameDraft(currentKit.name);
 
       const [kitRules, kitFacts] = await Promise.all([
         getKitRules(kitId),
@@ -807,6 +811,34 @@ export function KitDetail() {
       setToastError(err instanceof Error ? err.message : 'Failed to update fact');
     } finally {
       endMutation();
+    }
+  };
+
+  const handleSaveKitName = async () => {
+    if (!kit || !isDraft) return;
+    const nextName = kitNameDraft.trim();
+    if (!nextName) {
+      setToastError('Kit name cannot be empty.');
+      return;
+    }
+    if (nextName.length > 120) {
+      setToastError('Kit name must be 120 characters or fewer.');
+      return;
+    }
+    if (nextName === kit.name) return;
+
+    setIsSavingKitName(true);
+    beginMutation();
+    try {
+      const savedName = await updateKitName(kit.id, nextName);
+      setKit(current => current ? { ...current, name: savedName } : current);
+      setKitNameDraft(savedName);
+      setToastError(null);
+    } catch (err) {
+      setToastError(err instanceof Error ? err.message : 'Failed to rename kit');
+    } finally {
+      endMutation();
+      setIsSavingKitName(false);
     }
   };
 
@@ -935,8 +967,33 @@ export function KitDetail() {
             ← Back
           </Link>
           <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-gray-900">{kit.name}</h1>
+            <div className="flex flex-wrap items-center gap-3">
+              {isDraft ? (
+                <>
+                  <label className="sr-only" htmlFor="kit-name">Kit name</label>
+                  <input
+                    id="kit-name"
+                    aria-label="Kit name"
+                    value={kitNameDraft}
+                    onChange={event => setKitNameDraft(event.target.value)}
+                    maxLength={120}
+                    disabled={isSavingKitName || pendingMutations > 0}
+                    className="w-full min-w-0 max-w-full rounded-lg border border-gray-300 px-3 py-2 text-2xl font-bold text-gray-900 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-gray-50"
+                  />
+                  {kitNameDraft.trim() !== kit.name && (
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveKitName()}
+                      disabled={isSavingKitName || pendingMutations > 0 || !kitNameDraft.trim()}
+                      className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:cursor-wait disabled:opacity-50"
+                    >
+                      {isSavingKitName ? 'Saving...' : 'Save name'}
+                    </button>
+                  )}
+                </>
+              ) : (
+                <h1 className="text-2xl font-bold text-gray-900">{kit.name}</h1>
+              )}
               <StatusBadge status={kit.status} />
               {isActive && <span className="px-2 py-0.5 text-xs font-medium bg-primary text-white rounded">Active</span>}
             </div>

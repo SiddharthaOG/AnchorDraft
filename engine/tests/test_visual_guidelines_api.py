@@ -8,7 +8,12 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from app.api.kits import UpdateVisualGuidelinesRequest, update_visual_guidelines
+from app.api.kits import (
+    UpdateKitNameRequest,
+    UpdateVisualGuidelinesRequest,
+    update_kit_name,
+    update_visual_guidelines,
+)
 from app.auth.dependencies import AuthUser, require_owner
 
 
@@ -160,3 +165,62 @@ def test_invalid_visual_guideline_payloads_are_rejected(payload):
 def test_empty_visual_guidelines_can_clear_optional_visual_checks():
     result = UpdateVisualGuidelinesRequest.model_validate({"visual_guidelines": {}})
     assert result.visual_guidelines.model_dump(exclude_none=True) == {}
+
+
+@pytest.mark.asyncio
+async def test_owner_can_rename_draft_kit_and_audit_change():
+    conn = FakeConnection([
+        {"id": str(KIT_ID), "status": "draft", "name": "Original Kit"},
+        {"name": "Campaign Brand Kit"},
+    ])
+    pool = FakePool(conn)
+    user = AuthUser(USER_ID, ORG_ID, ["owner"])
+
+    result = await update_kit_name(
+        KIT_ID,
+        UpdateKitNameRequest(name="  Campaign Brand Kit  "),
+        user,
+        pool,
+    )
+
+    assert result == {"kit_id": str(KIT_ID), "name": "Campaign Brand Kit"}
+    assert conn.fetchrow.await_count == 2
+    update_args = conn.fetchrow.await_args_list[1].args
+    assert update_args[1:4] == (KIT_ID, ORG_ID, "Campaign Brand Kit")
+    assert conn.execute.await_args.args[3:5] == (KIT_ID, json.dumps(
+        {"previous_name": "Original Kit", "name": "Campaign Brand Kit"},
+        separators=(",", ":"),
+    ))
+
+
+@pytest.mark.asyncio
+async def test_kit_rename_cannot_cross_organization_boundary():
+    conn = FakeConnection([None])
+    user = AuthUser(USER_ID, ORG_ID, ["owner"])
+
+    with pytest.raises(HTTPException) as exc:
+        await update_kit_name(KIT_ID, UpdateKitNameRequest(name="Renamed"), user, FakePool(conn))
+
+    assert exc.value.status_code == 404
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_active_kit_cannot_be_renamed():
+    conn = FakeConnection([{"id": str(KIT_ID), "status": "active", "name": "Active Kit"}])
+    user = AuthUser(USER_ID, ORG_ID, ["owner"])
+
+    with pytest.raises(HTTPException) as exc:
+        await update_kit_name(KIT_ID, UpdateKitNameRequest(name="Changed"), user, FakePool(conn))
+
+    assert exc.value.status_code == 409
+    conn.execute.assert_not_awaited()
+    assert conn.fetchrow.await_count == 1
+
+
+def test_kit_name_is_trimmed_and_rejects_blank_or_oversized_values():
+    assert UpdateKitNameRequest(name="  Brand Kit  ").name == "Brand Kit"
+    with pytest.raises(ValidationError):
+        UpdateKitNameRequest(name="   ")
+    with pytest.raises(ValidationError):
+        UpdateKitNameRequest(name="x" * 121)
