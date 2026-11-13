@@ -1,200 +1,238 @@
-# ARCHITECTURE.md — AnchorDraft (Phase 1)
+# AnchorDraft — System Architecture
 
-**Status:** DRAFT for review. Planning document written on 3 Nov 2026, before the Round 2 build window opens (4 Nov 10:00). It contains no application code. Decisions marked **PROPOSED** have not yet been confirmed by the architect. Items marked **VERIFY** must be checked against current documentation before they are relied on.
+**Document status:** As-built architecture reference  
+**Last updated:** 13 November 2026  
+**Repository:** [SiddharthaOG/AnchorDraft](https://github.com/SiddharthaOG/AnchorDraft)
 
-**Companion documents:** `DATA_MODEL.md` (Phase 2), `API_CONTRACT.md` (Phase 3), `REVIEW_ENGINE.md` (Phase 4). Still to write: build plan (Phase 5), disclosure log (Phase 6).
+This document describes the implemented application architecture. Earlier planning decisions are retained as historical context where useful; this document is not a pre-build proposal.
 
-**Revision 2 (3 Nov 2026):** decisions 1 to 9 confirmed by the architect; decision 9 resolved in favour of database functions; decisions 10 to 12 added.
+## 1. System overview
 
-**Revision 3 (4 Nov 2026):** Decision 13 explicitly approved by the architect. Decision table is the current source of truth for status.
+AnchorDraft is an organisation-aware content and brand-compliance platform. It combines structured Brand Kits, deterministic validation, AI-assisted analysis, revision-aware review state, confidentiality controls, and human approval workflows.
 
----
+The system is split into four principal areas:
 
-## 1. Objectives
+1. **Web application** — authenticated user interface and organisation workflows.
+2. **FastAPI engine** — trusted API boundary, authentication/authorisation checks, validation, imports, linting, and review orchestration.
+3. **Supabase** — identity, PostgreSQL data, Row Level Security, and database functions.
+4. **External AI providers** — optional providers behind a backend adapter; provider credentials remain server-side.
 
-### 1.1 Goal for the Round 2 core
-One complete review-and-approval loop that never breaks. It doubles as the demo script and the acceptance test:
+## 2. Deployment topology
 
-1. The Guideline Owner loads a sample brand kit (about 15 rules and 5 approved facts).
-2. The Creator submits a draft containing 4 planted issues: a banned term, an absolute claim, an unsupported fact, and a missing alt text.
-3. The system returns at least 3 findings. **Every shown finding has a valid rule or fact citation and a quote that really appears in the draft.**
-4. The Creator accepts one finding, dismisses one with a reason, and a new revision is created.
-5. The Manager requests changes, the Creator revises, and the Manager approves.
-6. The insights page shows the dismissed rule.
+| Component | Technology | Deployment | Responsibility |
+|---|---|---|---|
+| Frontend | React 19, TypeScript, Vite 8, Tailwind CSS 4 | Vercel | UI, routing, authenticated user experience |
+| Backend | Python, FastAPI, asyncpg, Supabase Python client | Render | Trusted API, validation, workflow enforcement, review processing |
+| Identity | Supabase Auth | Supabase | User authentication and access tokens |
+| Database | PostgreSQL, Supabase | Supabase | Organisation data, content, revisions, Brand Kits, findings, decisions, approvals and audit records |
+| AI adapters | Groq and Gemini adapters; fake adapter for local/test | Called by backend | Text and vision analysis where configured |
 
-### 1.2 Quality priorities (in order)
-1. Citation correctness.
-2. Access control and security.
-3. Usability.
-4. Speed. Target (ASSUMPTION): an asynchronous review of a 500-word post completes in under 30 seconds.
+Production endpoints:
+- Frontend: https://anchordraft.vercel.app/
+- Backend health: https://anchordraft.onrender.com/v1/health
 
-### 1.3 Non-goals
-Direct publishing to social platforms, real-time co-editing, fine-tuned models, and all Tier 3 items.
-
-### 1.4 Constraints
-- Window: Wed 4 Nov 10:00 to Sat 7 Nov 10:00. Solo, AI-assisted development.
-- Roughly 30 to 35 focused hours.
-- Only in-window work is judged. AI tools, templates, reused patterns and external services must be disclosed. Judges may ask the builder to explain any part, so every design must be explainable.
-
-## 2. System context and trust boundaries
+## 3. System context and trust boundaries
 
 ```mermaid
 flowchart LR
-  user[Browser: React + Vite] -->|login, reads under RLS| supa[(Supabase: Auth, Postgres, Storage, Realtime)]
-  user -->|POST /reviews with JWT| engine[Review service: FastAPI]
-  engine -->|service role key| supa
-  engine -->|draft + purpose + relevant rules| llm[LLM provider: Gemini]
+    U[User browser] -->|HTTPS / React app| W[Vercel frontend]
+    W -->|Supabase public client / user JWT| S[Supabase Auth + Postgres]
+    W -->|Bearer JWT /v1 API| E[FastAPI engine on Render]
+    E -->|Verify JWT signing key| J[Supabase JWKS]
+    E -->|Service role client + PostgreSQL connection| S
+    E -->|Redacted/approved request data| L[Configured AI provider]
 ```
 
-| Component | Trust level | Responsibility |
+| Component | Trust boundary | Rules |
 |---|---|---|
-| Web app (React) | **Untrusted** | UI only. Reads through RLS. Never calls the LLM. Never holds a service key. |
-| Supabase | Enforces access | Auth, Postgres, Storage, Realtime. RLS isolates each organisation. |
-| Review service (FastAPI) | Trusted | Verifies the JWT and the caller's role itself, runs reviews, is the **only writer of findings**. |
-| LLM provider (Gemini) | External | Receives only the draft text, the stated purpose and the relevant rules. |
-| Drafts and uploaded files | **Untrusted data** | Treated as data, never as instructions. |
+| Browser | Untrusted | Never holds service-role or provider secrets. Client-supplied roles and organisation IDs are not trusted. |
+| Supabase Auth | Identity authority | Issues access tokens; the backend verifies signature, expiry, issuer and audience. |
+| PostgreSQL/RLS | Data access boundary | Organisation membership and role-aware policies protect browser-side data access. |
+| FastAPI engine | Trusted server boundary | Verifies JWTs, derives membership and roles, validates input, and performs privileged operations. |
+| AI provider | External processor | Receives only data passed by the backend processing flow; confidentiality controls apply before outbound processing. |
+| User content and uploaded files | Untrusted input | Treated as data, not instructions; file type/size and content validation apply. |
 
-## 3. Main flow: submitting a draft for review
+The Supabase service-role key, database connection string, JWT verification configuration, encryption key, and AI-provider keys belong only in the backend environment. The browser uses the public Supabase anon/publishable key.
+
+## 4. Authentication and organisation scoping
+
+1. The browser signs in through Supabase Auth and obtains an access token.
+2. Requests to protected FastAPI routes include `Authorization: Bearer <access-token>`.
+3. The engine verifies the JWT using the configured Supabase JWKS endpoint, issuer, audience, and an explicit signing-algorithm allowlist.
+4. The engine extracts the authenticated user ID from the verified token.
+5. The engine loads the user's organisation memberships and role assignments from Supabase.
+6. Endpoint dependencies enforce the required role and a valid organisation context.
+7. Organisation IDs and roles supplied by the client are not treated as authority.
+
+The frontend also uses Supabase directly for supported user-facing data access, with PostgreSQL RLS and guarded database functions enforcing the database boundary.
+
+## 5. Core domain and review workflow
+
+The principal domain concepts are:
+
+- **Organisation and membership:** tenant boundary and role assignments.
+- **Brand Kit:** versioned set of rules, approved facts, and visual guideline configuration.
+- **Content:** the managed item being reviewed.
+- **Revision:** immutable version of content text.
+- **Review:** a processing run associated with a content revision and kit version.
+- **Finding:** a deterministic or AI-assisted issue, linked to a rule or approved fact and a quoted text span where applicable.
+- **Decision:** a human accept/edit/dismiss decision on a finding.
+- **Approval:** workflow outcome and sign-off state.
+- **Guideline suggestion:** proposed change derived from recurring review outcomes, subject to human approval.
+- **Confidentiality policy and preview:** organisation settings and a short-lived redacted outbound-payload confirmation flow.
+- **Audit log:** record of important administrative and workflow operations.
 
 ```mermaid
-sequenceDiagram
-  participant U as Creator (browser)
-  participant S as Supabase
-  participant E as Review service
-  participant L as LLM provider
-  U->>S: insert draft revision
-  U->>E: POST /reviews {revision_id} + JWT
-  E->>S: verify membership and role
-  E->>S: create review (queued)
-  E-->>U: 202 {review_id}
-  E->>S: load revision text + active kit
-  E->>E: deterministic checks
-  E->>L: draft + purpose + rules (strict JSON output)
-  L-->>E: findings
-  E->>E: citation validator (drop invalid findings)
-  E->>S: write findings, set status done
-  S-->>U: realtime status update
+flowchart TD
+    A[Creator creates content] --> B[Create content revision]
+    B --> C[Review request]
+    C --> D[Load revision and applicable Brand Kit]
+    D --> E[Deterministic checks]
+    D --> F[AI-assisted analysis, if configured and confirmed]
+    E --> G[Shared finding validation]
+    F --> G
+    G --> H[Persist review findings]
+    H --> I[Human decisions]
+    I --> J[Apply decisions to a new revision]
+    J --> K[Re-review latest revision]
+    K --> L{Submission eligible?}
+    L -->|No| I
+    L -->|Yes| M[Submit for approval]
+    M --> N[Reviewer / Manager / Owner workflow]
+    N --> O[Recorded approval outcome]
 ```
 
-## 4. Key decisions
+### Revision-aware submission invariant
 
-| # | Decision | Reason | Risk and mitigation | Status |
-|---|---|---|---|---|
-| 1 | Asynchronous review: a background task plus a status field | Absorbs LLM latency and free-tier cold starts without a queue service | A restart can lose a job. Add a `failed` status, a retry button, and mark stuck reviews failed | DECIDED |
-| 2 | FastAPI is the only writer of `reviews` and `findings` | Users cannot forge findings | Service key stays server-side only | DECIDED |
-| 3 | The server computes text offsets from the model's quoted span | Never trust model-supplied offsets | If the quote is not found, drop the finding | DECIDED |
-| 4 | Rules are data with stable keys in versioned kits | Insights survive rewording; findings stay explainable | Reviews record the kit version used | DECIDED |
-| 5 | Pass the whole kit in the prompt, with a size cap | No retrieval to debug in 72 hours | Fail with a clear message if the kit is too big; retrieval is the later path | DECIDED |
-| 6 | The LLM sits behind a provider adapter. Candidate providers: Gemini on the free tier, with Groq as a configured alternative; final provider selection and model identifier are determined at the provider spike (`REVIEW_ENGINE.md` section 3). | Swap models, test with a fake provider | Keep the interface tiny; handle rate limits and timeouts explicitly | DECIDED |
-| 7 | Schema is delivered as SQL migration files in the repository | Reviewable and reproducible | | DECIDED |
-| 8 | Deterministic findings also pass through the citation validator | One citation rule for every finding | | DECIDED |
-| 9 | All workflow state changes go through atomic `SECURITY DEFINER` database functions called with Supabase RPC (not triggers); users have no direct write access to the workflow tables | Atomic, testable, cannot be bypassed from the browser | Functions must be hardened (fixed `search_path`, role checks, locked permissions); see `DATA_MODEL.md` 8.4 | DECIDED |
-| 10 | The review service exposes only four endpoints: start review, import text, lint kit, health. Everything else is direct Supabase | Smallest Python surface to build, test and defend | | DECIDED |
-| 11 | Partial results: if the model fails, the review still finishes with deterministic findings (`llm_status = failed`) | The demo survives a model outage or quota error | Submission is blocked until a review with a working model run exists | DECIDED |
-| 12 | Decisions and applying them are separate: `record_decision`, then `apply_decisions` builds one new revision on the server | One re-review per batch (fewer model calls); the client cannot tamper with revision text | Overlapping or stale suggestions are skipped and reported | DECIDED |
-| 13 | One shared citation validator runs on every candidate finding, and the review service writes results through one atomic service-only database function | A finding can only reach the database if it cites a real rule or fact and a real quote; a review is never half-written | The validator is the critical component and gets the heaviest testing (`REVIEW_ENGINE.md` section 7) | DECIDED |
+Findings and decisions belong to a particular review/revision context. Submission eligibility must be evaluated against the latest content revision and its applicable review state. An older review or decision must not be used to bypass unresolved findings on a newer revision.
 
-**Decision 6 clarification:** The following are **decided**:
-- Provider-adapter architecture (the LLM sits behind an adapter interface).
-- Candidate provider strategy for the provider spike: Gemini on the free tier, with Groq as a configured alternative.
+The server-side workflow and database operations are designed to preserve this invariant; the client cannot simply declare a submission eligible.
 
-The following are **not decided** and remain subject to the provider spike (`REVIEW_ENGINE.md` section 3):
-- Exact provider selection.
-- Exact model identifier.
-- SDK choice.
-- Quota and free-tier suitability.
+## 6. Review engine and provider boundary
 
-Decision 8 lets day 1 end with a validated, cited finding without any LLM call, as promised in the Round 1 plan.
+The engine supports deterministic checks and AI-assisted analysis through provider adapters.
 
-## 5. Implementation approach
+- Supported provider adapter types in code: `groq`, `gemini`, and `fake`.
+- The fake provider is for local/test environments and is rejected in staging/production.
+- Primary and fallback provider settings are configurable.
+- Gemini supports a distinct fallback model for same-provider transient failures.
+- Transient provider failures and timeouts can trigger fallback within a bounded overall request deadline.
+- Findings pass through shared validation before persistence; invalid citations or quotes should not be accepted as valid findings.
+- Provider credentials and prompt processing remain server-side.
 
-### 5.1 Repository layout
-```
-anchordraft/
-  docs/              design documents, ai-log/
-  supabase/migrations/
-  engine/            app/{api,auth,pipeline,checks,llm,validator,store,models}, tests/
-  web/               src/features/{auth,kits,drafts,findings,approvals,insights}, src/lib, src/components
-  README.md
-```
+The exact deployed provider and model are runtime configuration, not inferred from the repository defaults. Quotas, model availability, and provider data terms depend on the configured account and must be reviewed separately.
 
-### 5.2 Principles
-- Frontend: feature folders, with a service layer that takes an injected Supabase client so it can be tested.
-- Engine: build and unit-test **the validator and the deterministic checks first, against a fake LLM provider.** Add the real provider afterwards.
-- Every external call has a timeout and an explicit failure path.
+## 7. Confidentiality-aware processing
 
-### 5.3 Build slices (focused-hour budget)
+The confidentiality flow introduces a deliberate checkpoint before external AI processing:
 
-| Slice | Work | Hours |
+1. Load the organisation's confidentiality policy.
+2. Redact configured sensitive patterns and custom terms from text before provider processing.
+3. Prepare the outbound payload and its hash.
+4. Present the redacted outbound-data preview to the user.
+5. Require explicit confirmation before processing.
+6. Store only the redacted provider prompt and payload hash in the preview record.
+7. Keep the placeholder reverse map encrypted with `PREVIEW_ENCRYPTION_KEY`, then clear it after terminal processing.
+8. Expire preview records after the configured short lifetime.
+
+Important boundary: attached image bytes are not OCR-redacted. When images are sent to a vision provider, explicit creator consent is required. The workflow is a safeguard, not a guarantee that sensitive information can never be exposed.
+
+## 8. Guideline-gap analytics
+
+The analytics workflow examines recurring review outcome patterns to identify guidelines that may be unclear or repeatedly misunderstood. It applies evidence thresholds and deterministic clustering, then presents proposed guideline improvements.
+
+Suggestions are not silently applied:
+- A human reviewer with the appropriate role accepts or rejects the suggestion.
+- Acceptance follows the Brand Kit draft/version workflow.
+- Suggestion lifecycle operations are organisation-scoped and auditable.
+
+This feature should be described as pattern-based decision support, not a statistically validated model or a system with established precision/recall metrics.
+
+## 9. API and data-access surfaces
+
+AnchorDraft uses three related access surfaces:
+
+| Surface | Typical use | Enforcement |
 |---|---|---|
-| 0 | Repository, docs commit, both services deployed as hello-world, Supabase project | 2 |
-| 1 | Schema, auth, roles, RLS | 4 |
-| 2 | Brand kit CRUD and seed data | 3 |
-| 3 | Deterministic checks and validator with fake provider and tests | 4 |
-| 4 | LLM adapter, prompt, end-to-end review wired to the UI | 5 |
-| 5 | Triage UI (accept, edit, dismiss) and revisions | 4 |
-| 6 | Approvals, comments, reviewer routing | 4 |
-| 7 | Insights page and 30-post benchmark script | 3 |
-| 8 | Hardening, README and disclosure, presentation | 3 |
-| | **Total** | **32** |
+| FastAPI REST API under `/v1` | Review processing, imports, kit linting, confidentiality and analytics operations | JWT verification, server-side role checks, organisation scoping, validation |
+| Supabase client under RLS | Supported browser-side reads and user-facing data operations | Supabase Auth identity and PostgreSQL RLS |
+| Supabase RPC/database functions | Guarded workflow state changes and atomic operations | Function-level identity/role/state checks and restricted execute permissions |
 
-### 5.4 Checkpoints
-- End of day 1 (Thu 5 Nov 10:00): both services deployed and talking; a pasted draft returns at least one validated, cited finding.
-- Middle of day 2: full loop works.
-- End of day 2 (Fri 6 Nov 10:00): roles, comments, revision history complete.
-- Day 3 morning: feature freeze.
-- Sat 7 Nov before 07:00: submission uploaded.
+The API surface has expanded beyond the original four-endpoint planning scope. Consult the running FastAPI OpenAPI document and current route modules for the implemented endpoint list.
 
-### 5.5 Review-driven workflow
-One branch per slice. A short pull request to self with a checklist: matches scope; I can explain it; no invented dependencies or versions; security items handled. Conventional commit messages. The first commit on 4 Nov is the approved design documents, labelled pre-window planning.
+## 10. Runtime configuration
 
-## 6. Deployment topology
+### Frontend
 
-| Part | Host | Notes |
-|---|---|---|
-| Web app | Vercel | Static build; only public keys |
-| Review service | Render | Free tier cold starts: warm it before demos |
-| Data, auth, files | Supabase | Managed |
+- `VITE_ENGINE_URL`
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
 
-**Configuration (names only; never commit values):**
-- Web: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_ENGINE_URL`.
-- Engine: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, JWT verification settings (VERIFY current Supabase approach), `LLM_PROVIDER` (`gemini` or `groq`, chosen at the provider spike), `LLM_MODEL`, the matching key (`GEMINI_API_KEY` or `GROQ_API_KEY`), `ALLOWED_ORIGINS`, `DAILY_REVIEW_CAP`.
+### Backend
 
-## 7. Security boundaries (summary)
-- The service role key and the LLM key exist only in the engine's environment.
-- The engine re-derives the caller's organisation and role from the database. It never trusts a client-supplied `org_id` or role.
-- Drafts and guideline files are data. The prompt delimits them clearly, the model has no tools, and its output must match a strict schema.
-- Upload type and size limits; rate limiting and a daily review cap on the review endpoint.
+- `ENVIRONMENT`
+- `DATABASE_URL`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_JWKS_URL`
+- `SUPABASE_ISSUER`
+- `SUPABASE_AUDIENCE`
+- `ALLOWED_ORIGINS`
+- `PREVIEW_ENCRYPTION_KEY`
+- `LLM_PROVIDER`, `LLM_FALLBACK_PROVIDER`, `LLM_FALLBACK_ENABLED`
+- Provider-specific credentials and model/rate-limit settings
+- Review, upload, request, and rate-limit settings
 
-## 8. Risks and cut list
+See [engine/README.md](../engine/README.md), [engine/.env.example](../engine/.env.example), and [web/.env.example](../web/.env.example) for setup details. Never commit real values.
 
-| Risk | Mitigation |
-|---|---|
-| Two deployments in 72 hours | Deploy hello-world in Slice 0 |
-| Model invents findings | Citation validator; low-confidence flag |
-| Model rate limits or timeouts | Explicit failure status, retry button, deterministic checks still run |
-| Free-tier cold starts | Warm-up before demos, loading state |
-| Database function complexity and permissions | One negative test per function; harden every function per `DATA_MODEL.md` 8.4 |
-| Re-review noise (see `DATA_MODEL.md` Q1) | Accept in Tier 1; carry decisions forward in Tier 2 |
+## 11. Deployment and local development
 
-**Cut order if behind:** Tier 3 first (model-assisted rule extraction, realtime polish, UI polish), then PDF/DOCX import, then insights polish. Never cut deployment or the demo.
+- Vercel serves the frontend from the `web/` root.
+- Render serves the FastAPI application from the `engine/` root.
+- Supabase hosts Auth and PostgreSQL.
+- Local development uses the Supabase CLI and a Docker-compatible runtime.
+- SQL migrations are versioned in `supabase/migrations/`; demo seed scripts are separate because they require actual local Auth user UUIDs.
 
-## 9. Open decisions
+For a fresh checkout, follow the root [README](../README.md) and [Supabase migration guide](../supabase/migrations/README.md).
 
-**Remaining implementation/provider choices (subject to provider spike):**
-- Exact provider selection (Gemini vs. Groq).
-- Exact model identifier.
-- SDK choice.
-- Quota and free-tier suitability.
+Never run a destructive remote reset against the shared or production Supabase project. Review migration status and use the normal migration deployment workflow.
 
-**Open project-planning / acceptance questions (not yet explicitly approved):**
-- Confirmation of the Phase 1 acceptance scenario and slice hours.
-- Exact 32-hour slice plan budget.
+## 12. Key architecture decisions
 
-## 10. Review checklist (for the architect)
-- [ ] Does the acceptance scenario capture what judges should see?
-- [ ] Can I explain every component and boundary without looking at this document?
-- [ ] Does every decision stay inside Tier 1 and Tier 2?
-- [ ] Are there any invented dependencies, versions or features? (Mark them VERIFY.)
-- [ ] Is each security boundary enforced somewhere that is not the browser?
-- [ ] Can workflow state change in any way other than the ten database functions?
+The following decisions remain important to the implemented system:
+
+1. Reviews run asynchronously and expose explicit status.
+2. Privileged review writes are performed by the trusted backend/service-only database operations.
+3. Text offsets are computed and validated server-side rather than trusted from model output.
+4. Brand Kits are versioned and rules use stable identifiers.
+5. Deterministic and AI-assisted findings share validation requirements.
+6. LLM integrations sit behind a provider adapter.
+7. Schema changes are versioned as SQL migrations.
+8. Workflow state transitions use guarded, atomic database functions where defined.
+9. Model failure does not erase valid deterministic findings; review state records the AI outcome.
+10. Applying decisions creates a new revision rather than mutating historical revision text.
+11. Findings must cite applicable rules/facts and actual content spans before persistence.
+12. Organisation and role checks are enforced at server/database boundaries.
+13. Confidentiality preview/confirmation and human approval are explicit parts of the processing workflow.
+
+The historical decision log is maintained in [docs/ai-log/decisions.md](ai-log/decisions.md).
+
+## 13. Known limitations and operational considerations
+
+- Visual compliance is structured and rule-based; it is not pixel-perfect visual comparison or automated logo recognition.
+- AI-assisted findings can be incorrect and require human review.
+- Provider quotas, availability, and data terms vary by account and plan.
+- Image bytes are not OCR-redacted by the text confidentiality pipeline.
+- Automated test success does not establish large-scale production reliability or real-world model accuracy.
+- Staging and production have shared database infrastructure; changes must be handled with particular care.
+- Some capabilities remain future work or are marked as coming soon in the product. Do not infer implementation from a roadmap entry.
+
+## 14. Verification baseline
+
+The final-round repository verification reported:
+- Backend automated tests: 790 passed, 4 skipped.
+- Frontend automated tests: 235 passed.
+- Frontend production build: passed.
+- Git whitespace validation: clean.
+
+These are the recorded suite results for the final-round code state; they are not a claim of exhaustive authenticated production browser coverage.
