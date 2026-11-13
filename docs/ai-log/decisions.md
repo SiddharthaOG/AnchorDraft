@@ -26,3 +26,13 @@ All deviations from specification and architectural decisions recorded here.
 ## Future Decisions
 
 *To be added as slices progress.*
+
+## 2026-11-12 | Frontend and reliability hardening (approved isolated branch)
+
+| Date | Decision | Reason | Approved By | Deviates? |
+|------|----------|--------|-------------|-----------|
+| 2026-11-12 | Keep the existing Vite + React architecture; do not migrate to Next.js for the redesign | AnchorDraft is an authenticated client application; the requested visual and interaction improvements do not require SSR or a framework migration | Siddhartha (explicit request) | No |
+| 2026-11-12 | Extend the isolated `feat/frontend-redesign` branch to include integration, error-handling, accessibility and performance fixes in existing flows | The architect explicitly requested a whole-project review and hardening pass; production and the revision-test staging environment remain untouched | Siddhartha (explicit request) | Yes — approved scope extension |
+| 2026-11-12 | Use system font stacks and existing Tailwind 4 tokens; add no external font service or new dependency | Preserve the allowed stack and avoid introducing a runtime CDN dependency | Siddhartha (explicit request) | No |
+| 2026-11-12 | Normalize framework HTTP and request-validation errors to the documented API error envelope; validate request IDs and keep exception details out of logs | Align implementation with API_CONTRACT.md and the repository's privacy/logging requirements | Siddhartha (explicit request) | No |
+| 2026-11-12 | Forward the preview-approved vision request and expected asset checksums through the visual-analysis wrapper | The wrapper accepted these security/integrity inputs but failed to pass them to the analyzer | Siddhartha (explicit request) | No |

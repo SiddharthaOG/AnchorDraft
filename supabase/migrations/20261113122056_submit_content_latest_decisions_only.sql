@@ -116,15 +116,33 @@ end $$;
 -- with submit_content's pending-apply guard.
 create or replace view public.v_finding_state with (security_invoker = true) as
 select
-    f.*,
+    f.id,
+    f.org_id,
+    f.review_id,
+    f.source,
+    f.rule_id,
+    f.fact_id,
+    f.ref_key,
+    f.category,
+    f.severity,
+    f.quote,
+    f.start_offset,
+    f.end_offset,
+    f.explanation,
+    f.suggestion,
+    f.confidence,
+    f.needs_human,
+    f.needs_reviewer,
+    f.created_at,
     d.action as last_action,
     d.reason as last_reason,
     d.edited_text as last_edited_text,
     d.resulting_revision_id,
-    d.created_at as decided_at
+    d.created_at as decided_at,
+    f.asset_id
 from public.findings f
 left join lateral (
-    select *
+    select d.action, d.reason, d.edited_text, d.resulting_revision_id, d.created_at
     from public.decisions d
     where d.finding_id = f.id
     order by d.created_at desc, d.id desc

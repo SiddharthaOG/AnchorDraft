@@ -1,7 +1,15 @@
 /** AuthProvider - React context for authentication state. */
 
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
-import { initializeSession, onAuthStateChange, subscribeToSession } from './authService';
+import {
+  initializeSession,
+  onAuthStateChange,
+  subscribeToSession,
+  signInWithEmail as authSignInWithEmail,
+  signInWithOAuth as authSignInWithOAuth,
+  signOut as authSignOut,
+  switchOrganization as authSwitchOrganization,
+} from './authService';
 import type { SessionUser } from './types';
 
 interface AuthContextValue {
@@ -50,16 +58,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     init();
 
-    // Subscribe to auth state changes - only notify, don't set session
-    // The authoritative session updates come through subscribeToSession
-    const { unsubscribe: unsubscribeAuth } = onAuthStateChange((_event, _newSession) => {
-      if (!mounted) return;
+    // Subscribe to auth state changes - only notify, don't set session.
+    // A missing/invalid environment must surface as an auth error, not escape the effect.
+    let unsubscribeAuth = () => {};
+    try {
+      const subscription = onAuthStateChange((_event, _newSession) => {
+        if (!mounted) return;
+        // Actual session updates come through subscribeToSession.
+      });
+      unsubscribeAuth = subscription.unsubscribe;
+    } catch (err) {
+      if (mounted) {
+        setError(err instanceof Error ? err.message : 'Unable to initialize authentication');
+      }
+    }
 
-      // Only notify the callback about the auth event
-      // Actual session updates come through subscribeToSession
-    });
-
-    // Subscribe to session changes from auth service - this is the authoritative path
+    // Subscribe to session changes from auth service - this is the authoritative path.
     const unsubscribeSession = subscribeToSession(newSession => {
       if (mounted) {
         setSession(newSession);
@@ -77,9 +91,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     setIsLoading(true);
     try {
-      const { error } = await (await import('./authService')).signInWithEmail(email, password);
+      const { error } = await authSignInWithEmail(email, password);
       if (error) setError(error);
       return { error };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to sign in. Please try again.';
+      setError(message);
+      return { error: message };
     } finally {
       setIsLoading(false);
     }
@@ -89,9 +107,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     setIsLoading(true);
     try {
-      const { error } = await (await import('./authService')).signInWithOAuth(provider);
+      const { error } = await authSignInWithOAuth(provider);
       if (error) setError(error);
       return { error };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to start sign-in. Please try again.';
+      setError(message);
+      return { error: message };
     } finally {
       setIsLoading(false);
     }
@@ -101,9 +123,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     setIsLoading(true);
     try {
-      const { error } = await (await import('./authService')).signOut();
+      const { error } = await authSignOut();
       if (error) setError(error);
       return { error };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to sign out. Please try again.';
+      setError(message);
+      return { error: message };
     } finally {
       setIsLoading(false);
     }
@@ -112,7 +138,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const switchOrganization = useCallback(async (orgId: string) => {
     setError(null);
     try {
-      const { error } = await (await import('./authService')).switchOrganization(orgId);
+      const { error } = await authSwitchOrganization(orgId);
       if (error) setError(error);
       return { error };
     } catch (err) {

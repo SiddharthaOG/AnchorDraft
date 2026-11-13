@@ -153,7 +153,7 @@ async def test_multiple_organization_memberships_are_rejected(fake_supabase):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/v1/organizations/me/confidentiality-policy")
             assert response.status_code == 400
-            assert response.json()["detail"]["error"]["reason"] == "multiple_memberships"
+            assert response.json()["error"]["reason"] == "multiple_memberships"
     finally:
         app.dependency_overrides.clear()
 

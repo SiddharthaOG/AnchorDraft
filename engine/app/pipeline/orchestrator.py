@@ -1000,7 +1000,7 @@ class ReviewOrchestrator:
 
         except Exception as e:
             elapsed = time.time() - start_time
-            logger.exception(
+            logger.error(
                 "pipeline_failed",
                 extra={"review_id": review_id, "elapsed_ms": int((time.time() - start_time) * 1000), "error_type": type(e).__name__},
             )
