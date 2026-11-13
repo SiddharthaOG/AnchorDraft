@@ -12,6 +12,9 @@ let sessionListeners: Array<(session: SessionUser | null) => void> = []
 /** Invalidates asynchronous session builds when a newer auth transition occurs. */
 let authGeneration = 0
 
+/** Coalesces concurrent auth-event and explicit session builds for the same user. */
+let inFlightSessionBuild: { userId: string; promise: Promise<SessionUser> } | null = null
+
 function bumpGeneration(): number {
   authGeneration += 1
   return authGeneration
@@ -60,6 +63,7 @@ export async function initializeSession(): Promise<SessionUser | null> {
   if (error) {
     console.error('Failed to get Supabase session:', error)
 
+    inFlightSessionBuild = null
     currentSession = null
     notifyListeners()
 
@@ -69,12 +73,13 @@ export async function initializeSession(): Promise<SessionUser | null> {
   }
 
   if (!session?.user) {
+    inFlightSessionBuild = null
     currentSession = null
     notifyListeners()
     return null
   }
 
-  const builtSession = await buildSessionFromUser(session.user)
+  const builtSession = await buildSessionFromUserOnce(session.user)
 
   // Critical: the generation may have changed while building the session.
   if (generation !== getCurrentGeneration()) {
@@ -143,6 +148,29 @@ async function buildSessionFromUser(user: {
           : 'Failed to load user context',
     }
   }
+}
+
+/** Reuse an in-flight user-context build instead of issuing duplicate Supabase reads. */
+function buildSessionFromUserOnce(user: {
+  id: string
+  email?: string
+  user_metadata: Record<string, unknown>
+  app_metadata: Record<string, unknown>
+  aud: string
+  created_at: string
+}): Promise<SessionUser> {
+  if (inFlightSessionBuild?.userId === user.id) {
+    return inFlightSessionBuild.promise
+  }
+
+  const promise = buildSessionFromUser(user).finally(() => {
+    if (inFlightSessionBuild?.promise === promise) {
+      inFlightSessionBuild = null
+    }
+  })
+
+  inFlightSessionBuild = { userId: user.id, promise }
+  return promise
 }
 
 /** Fetch user profile with error handling. */
@@ -215,9 +243,12 @@ export async function signOut(): Promise<{ error: string | null }> {
 
   // Invalidate pending initialization and auth-event session builds.
   bumpGeneration()
+  inFlightSessionBuild = null
 
-  currentSession = null
-  notifyListeners()
+  if (currentSession !== null) {
+    currentSession = null
+    notifyListeners()
+  }
 
   return { error: null }
 }
@@ -245,29 +276,39 @@ export function onAuthStateChange(
   } = getSupabaseClient().auth.onAuthStateChange((event, session) => {
     if (!mounted) return
 
-    // Keep the external callback synchronous.
+    // Supabase callbacks must stay synchronous; defer any follow-up reads until
+    // the auth client's internal lock has been released.
     callback(event, session)
 
-    // Every auth event invalidates any older asynchronous session build.
+    if (event === 'SIGNED_OUT') {
+      bumpGeneration()
+      inFlightSessionBuild = null
+      if (currentSession !== null) {
+        currentSession = null
+        notifyListeners()
+      }
+      return
+    }
+
+    if (
+      !['SIGNED_IN', 'TOKEN_REFRESHED', 'USER_UPDATED'].includes(event) ||
+      !session?.user
+    ) {
+      // INITIAL_SESSION is handled by initializeSession on provider mount.
+      // Unrelated events must not invalidate that in-flight initialization.
+      return
+    }
+
+    // Only auth events that trigger a new session build invalidate older work.
     const generation = bumpGeneration()
 
-    queueMicrotask(async () => {
+    setTimeout(async () => {
       if (!mounted || generation !== getCurrentGeneration()) {
         return
       }
 
       try {
-        let nextSession: SessionUser | null = currentSession
-
-        if (event === 'SIGNED_IN' && session?.user) {
-          nextSession = await buildSessionFromUser(session.user)
-        } else if (event === 'SIGNED_OUT') {
-          nextSession = null
-        } else if (event === 'TOKEN_REFRESHED' && session?.user) {
-          nextSession = await buildSessionFromUser(session.user)
-        } else {
-          return
-        }
+        const nextSession = await buildSessionFromUserOnce(session.user)
 
         // Critical: don't apply an older build after a newer auth event.
         if (!mounted || generation !== getCurrentGeneration()) {
@@ -282,7 +323,7 @@ export function onAuthStateChange(
           err,
         )
       }
-    })
+    }, 0)
   })
 
   return {
