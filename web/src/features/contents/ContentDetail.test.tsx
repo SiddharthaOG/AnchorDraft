@@ -990,8 +990,10 @@ describe('ContentDetail', () => {
         expect(screen.getByText(/Findings \(1\)/)).toBeInTheDocument();
       });
 
-      // Submit button should not be visible (findings not decided)
+      // Submission stays gated, but the creator must be told exactly what is blocking it.
       expect(screen.queryByRole('button', { name: 'Submit for Review' })).not.toBeInTheDocument();
+      expect(await screen.findByText('1 finding still needs a decision')).toBeInTheDocument();
+      expect(screen.getByText(/Choose Accept, Edit, or Dismiss for every finding/)).toBeInTheDocument();
     });
 
     it('cannot submit when review has pending accept/edit decisions', { timeout: 15000 }, async () => {

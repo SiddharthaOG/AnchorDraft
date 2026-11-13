@@ -111,6 +111,14 @@
 -- SELECT submit_content(<content_id>);
 -- Should fail with conflict:changes_pending_apply
 
+-- Test 16b: only the latest decision per finding blocks submission
+\echo 'Test 16b: submit_content ignores superseded accept/edit decisions'
+-- Record an 'accept' decision for a finding, then record a later 'dismiss'
+-- decision for that same finding. The old accept has no resulting revision,
+-- but it is superseded and must not block submit_content. Repeat with 'edit'
+-- followed by 'dismiss'. A latest 'accept' or 'edit' without an applied
+-- resulting_revision_id must still fail with conflict:changes_pending_apply.
+
 -- Test 17: request_changes requires manager role
 \echo 'Test 17: request_changes requires manager'
 -- Creator tries request_changes

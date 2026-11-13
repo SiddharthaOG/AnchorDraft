@@ -1157,7 +1157,7 @@ const startPolling = useCallback(() => {
   const canUploadVisualAssets = session.currentRoles.includes('creator') || session.currentRoles.includes('owner');
   const hasLatestReview = !!latestReview;
   const hasPendingDecisions = findings.some(f => (f.last_action === 'accept' || f.last_action === 'edit') && !f.resulting_revision_id);
-  const hasDecisions = findings.some(f => f.last_action);
+  const undecidedFindingsCount = findings.filter(f => !f.last_action).length;
   // Zero findings is valid - all findings (zero) are decided vacuously
   const allFindingsDecided = findings.every(f => f.last_action);
   const canSubmit = canEditSelectedRevision && hasLatestReview && latestReview?.status === 'done' &&
@@ -1414,15 +1414,25 @@ const startPolling = useCallback(() => {
                   </button>
                 </div>
               )}
-
-              {!hasDecisions && allFindingsDecided && findings.length > 0 && canSubmit && (
-                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                  <p className="font-medium text-gray-800 mb-2">No Findings Decided</p>
-                  <p className="text-sm text-gray-600 mb-3">
-                    You need to accept or dismiss all findings before submitting.
-                  </p>
-                </div>
-              )}
+              {canEditSelectedRevision &&
+                reviewDataLoadedForRevisionId === latestRevision?.id &&
+                hasLatestReview &&
+                latestReview?.status === 'done' &&
+                findings.length > 0 &&
+                undecidedFindingsCount > 0 && (
+                  <div
+                    className="bg-amber-50 border border-amber-200 rounded-lg p-4"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <p className="font-medium text-amber-900 mb-2">
+                      {undecidedFindingsCount === 1 ? '1 finding still needs a decision' : `${undecidedFindingsCount} findings still need a decision`}
+                    </p>
+                    <p className="text-sm text-amber-800">
+                      Choose Accept, Edit, or Dismiss for every finding. Accepted or edited changes must also be applied before this content can be submitted.
+                    </p>
+                  </div>
+                )}
             </div>
           )}
 
