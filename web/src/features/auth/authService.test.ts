@@ -155,6 +155,60 @@ describe('authService', () => {
       expect(result?.user.id).toBe('user-1')
       expect(result?.currentRoles).toContain('creator')
     })
+
+    it('coalesces concurrent session initialization reads for the same user', async () => {
+      const pendingContext = deferred<ReturnType<typeof defaultUserContext>>()
+      mockResolveUserContext.mockReturnValue(pendingContext.promise)
+      mockSupabaseAuth.getSession.mockResolvedValue({
+        data: { session: makeSupabaseSession() },
+        error: null,
+      })
+
+      const first = initializeSession()
+      const second = initializeSession()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(mockResolveUserContext).toHaveBeenCalledTimes(1)
+
+      pendingContext.resolve(defaultUserContext())
+      const results = await Promise.all([first, second])
+
+      expect(results.some(result => result?.user.id === 'user-1')).toBe(true)
+      expect(mockResolveUserContext).toHaveBeenCalledTimes(1)
+    })
+
+    it('coalesces the SIGNED_IN event build with explicit post-login initialization', async () => {
+      const pendingContext = deferred<ReturnType<typeof defaultUserContext>>()
+      mockResolveUserContext.mockReturnValue(pendingContext.promise)
+      mockSupabaseAuth.getSession.mockResolvedValue({
+        data: { session: makeSupabaseSession() },
+        error: null,
+      })
+
+      let authCallback: ((event: string, session: any) => void) | undefined
+      mockSupabaseAuth.onAuthStateChange.mockImplementation((callback: any) => {
+        authCallback = callback
+        return { data: { subscription: { unsubscribe: vi.fn() } } }
+      })
+
+      const subscription = onAuthStateChange(() => {})
+      authCallback?.('SIGNED_IN', makeSupabaseSession())
+      vi.advanceTimersByTime(0)
+
+      const explicitInitialization = initializeSession()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(mockResolveUserContext).toHaveBeenCalledTimes(1)
+
+      pendingContext.resolve(defaultUserContext())
+      const result = await explicitInitialization
+
+      expect(result?.user.id).toBe('user-1')
+      expect(mockResolveUserContext).toHaveBeenCalledTimes(1)
+      subscription.unsubscribe()
+    })
   })
 
   describe('signOut', () => {
@@ -188,6 +242,35 @@ describe('authService', () => {
   })
 
   describe('stale session invalidation', () => {
+    it('does not invalidate initial session initialization on INITIAL_SESSION', async () => {
+      const pendingContext = deferred<ReturnType<typeof defaultUserContext>>()
+      mockResolveUserContext.mockReturnValue(pendingContext.promise)
+      mockSupabaseAuth.getSession.mockResolvedValue({
+        data: { session: makeSupabaseSession() },
+        error: null,
+      })
+
+      const initPromise = initializeSession()
+      await Promise.resolve()
+      expect(mockResolveUserContext).toHaveBeenCalled()
+
+      let authCallback: ((event: string, session: any) => void) | undefined
+      mockSupabaseAuth.onAuthStateChange.mockImplementation((callback: any) => {
+        authCallback = callback
+        return { data: { subscription: { unsubscribe: vi.fn() } } }
+      })
+
+      const subscription = onAuthStateChange(() => {})
+      authCallback?.('INITIAL_SESSION', makeSupabaseSession())
+
+      pendingContext.resolve(defaultUserContext())
+      const result = await initPromise
+
+      expect(result?.user.id).toBe('user-1')
+      expect(getSession()?.user.id).toBe('user-1')
+      subscription.unsubscribe()
+    })
+
     it('does not restore an initialization after sign out', async () => {
       const pendingContext = deferred<ReturnType<typeof defaultUserContext>>()
 
@@ -247,7 +330,8 @@ describe('authService', () => {
 
       authCallback?.('SIGNED_IN', makeSupabaseSession())
 
-      // Run the queued auth-event handler until the async build starts.
+      // The auth listener defers Supabase reads until after its callback returns.
+      vi.advanceTimersByTime(0)
       await Promise.resolve()
       await Promise.resolve()
 

@@ -15,9 +15,13 @@ export class AppErrorBoundary extends Component<Props, State> {
     return { hasError: true };
   }
 
-  componentDidCatch(error: Error, _info: ErrorInfo) {
-    // Never log component props or rendered content: they may contain draft text.
-    console.error('Application render failed', { errorType: error.name || 'Error' });
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // Log diagnostic metadata only; never log props, state, or rendered draft content.
+    console.error('Application render failed', {
+      errorType: error.name || 'Error',
+      message: error.message,
+      componentStack: info.componentStack,
+    });
   }
 
   private recover = () => {
