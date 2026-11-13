@@ -2,155 +2,281 @@
 
 # ⚓ AnchorDraft
 
-*Pre-publication brand-governance platform for startups.*
+**Pre-publication brand-governance and content-compliance platform.**
 
-![FastAPI](https://img.shields.io/badge/FastAPI-0.162-009688?style=for-the-badge&logo=fastapi&logoColor=white)
-![React](https://img.shields.io/badge/React-19-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
-![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
-![Vite](https://img.shields.io/badge/Vite-8-646CFF?style=for-the-badge&logo=vite&logoColor=white)
-![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?style=for-the-badge&logo=tailwind-css&logoColor=white)
-![Supabase](https://img.shields.io/badge/Supabase-Backend-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white)
-![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Node.js](https://img.shields.io/badge/Node.js-20.19+-339933?style=for-the-badge&logo=node.js&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)
+Review content against organisation-specific brand rules, manage findings across revisions, and move submissions through human-led review and approval.
 
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.162-009688?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-19-20232A?style=flat-square&logo=react)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-8-646CFF?style=flat-square&logo=vite)](https://vite.dev/)
+[![Supabase](https://img.shields.io/badge/Supabase-Postgres%20%2B%20Auth-3ECF8E?style=flat-square&logo=supabase)](https://supabase.com/)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python)](https://python.org/)
+
+[Live application](https://anchordraft.vercel.app/) · [API health](https://anchordraft.onrender.com/v1/health) · [Architecture](docs/ARCHITECTURE.md)
 
 </div>
 
 ---
 
-## 📁 Repository Structure
+## What it does
+
+AnchorDraft helps organisations apply their own brand, editorial, and content requirements before publication. It combines:
+
+- **Brand Kits:** versioned, organisation-specific rules, approved facts, and visual guideline settings.
+- **Deterministic linting:** repeatable checks against configured rules.
+- **AI-assisted review:** candidate findings supported by rule/fact references and quoted draft text.
+- **Revision-aware workflows:** findings and decisions are evaluated against the relevant content revision.
+- **Human review and approvals:** Creator, Reviewer, Manager, and Owner workflows.
+- **Confidentiality-aware processing:** sensitive-data redaction, outbound payload preview, and explicit confirmation before external AI processing.
+- **Guideline-gap analytics:** recurring review outcomes can inform proposed guideline improvements, subject to human approval.
+- **Auditability:** important administrative operations are recorded.
+
+AI output is advisory. Authorised people retain responsibility for review and approval decisions. Visual compliance currently uses structured guideline configuration and deterministic checks; it is not pixel-perfect visual recognition or automated logo identity detection.
+
+## Application and repository
+
+| Resource | Location |
+|---|---|
+| Production frontend | https://anchordraft.vercel.app/ |
+| Production API health | https://anchordraft.onrender.com/v1/health |
+| Public source repository | https://github.com/SiddharthaOG/AnchorDraft |
+
+The public URL loads the application shell. Protected workspaces require an authorised account. Demo credentials should be distributed separately to intended evaluators; do not commit passwords or production secrets to this repository.
+
+## Architecture
+
+| Layer | Technology | Responsibility |
+|---|---|---|
+| Web | React, TypeScript, Vite, Tailwind CSS | Application UI and authenticated user workflows |
+| API | Python, FastAPI | Authentication, role/tenant checks, validation, review orchestration |
+| Identity and data | Supabase Auth, PostgreSQL | User identity, organisation membership, application data and RLS |
+| Review providers | Provider adapter for Groq/Gemini; fake provider for local tests | AI-assisted text and vision analysis |
+| Hosting | Vercel, Render, Supabase | Frontend, API service, database and authentication |
+
+The browser never receives the Supabase service-role key or an AI-provider key. The backend verifies Supabase access tokens and derives organisation membership and roles server-side.
+
+## Repository layout
 
 ```text
-anchordraft/
-├── docs/                 # Design documents and AI logs
-├── supabase/migrations/  # Database migrations
-├── engine/               # FastAPI review service
+AnchorDraft/
+├── docs/                  # Architecture, data model, API and review-engine docs
+├── engine/                # Python / FastAPI review service
 │   ├── app/
-│   └── tests/
-└── web/                  # Vite + React + TypeScript + Tailwind CSS 4
-    └── src/
+│   ├── tests/
+│   ├── .env.example
+│   └── pyproject.toml
+├── web/                   # React / TypeScript / Vite frontend
+│   ├── src/
+│   ├── .env.example
+│   └── package.json
+├── supabase/
+│   ├── migrations/        # Ordered SQL migrations
+│   ├── seed/              # Explicit local/demo seed scripts
+│   └── config.toml
+└── README.md
 ```
 
----
-
-## 🚀 Quick Start
+## Quick start
 
 ### Prerequisites
 
-![Node.js](https://img.shields.io/badge/Node.js-20.19+_or_22.12+-339933?style=flat-square&logo=node.js&logoColor=white)
-![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)
-![uv](https://img.shields.io/badge/uv-recommended-de4c9f?style=flat-square)
+- Git
+- Node.js **22.x** (the frontend declares Node 22.x)
+- Python **3.11 or newer**; the deployed Render service is configured for Python 3.12.10
+- [uv](https://docs.astral.sh/uv/) (recommended for Python dependency management)
+- [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started)
+- Docker Desktop or another Docker-compatible runtime for the local Supabase stack
 
-- Node.js 20.19+ or 22.12+ (Vite 8 requirement)
-- Python 3.11+ (FastAPI 0.162 requirement)
-- uv (recommended) or pip
+### 1. Clone the repository
 
----
+```bash
+git clone https://github.com/SiddharthaOG/AnchorDraft.git
+cd AnchorDraft
+```
 
-### ⚙️ Engine (FastAPI)
+### 2. Start the local Supabase stack
+
+Docker must be running.
+
+```bash
+supabase start
+supabase status
+```
+
+Keep the local API URL, database connection string, anon key, and service-role key from the status output. The local Supabase defaults used by this repository are documented in `supabase/config.toml`.
+
+Apply the repository migrations to the local database:
+
+```bash
+supabase db reset
+```
+
+This resets **the local database only**, then replays the checked-in migrations. It does not create the demo Auth users automatically; see [Local database and demo seed setup](supabase/migrations/README.md).
+
+### 3. Configure and run the backend
 
 ```bash
 cd engine
+```
+
+Copy the environment template to `.env` and fill in the local Supabase values:
+
+```bash
 cp .env.example .env
-# Edit .env with your values
-uv sync --extra test  # or: pip install -e ".[test]"
+```
+
+At minimum, configure:
+- `ENVIRONMENT=development`
+- `DATABASE_URL`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_JWKS_URL`
+- `SUPABASE_ISSUER`
+- `SUPABASE_AUDIENCE=authenticated`
+
+For local Supabase, the usual URL forms are:
+- API: `http://127.0.0.1:54321`
+- JWKS: `http://127.0.0.1:54321/auth/v1/.well-known/jwks.json`
+- Issuer: `http://127.0.0.1:54321/auth/v1`
+- Database: `postgresql://postgres:postgres@127.0.0.1:55432/postgres`
+
+Use the actual values reported by your local Supabase CLI if they differ. The local fake LLM provider is permitted only for local/test environments.
+
+Install and run:
+
+```bash
+uv sync --extra test
 uv run uvicorn app.main:app --reload
 ```
 
-> ✅ The engine will be available at `http://localhost:8000/v1/health`.
+The API is available at `http://127.0.0.1:8000`; health check: `http://127.0.0.1:8000/v1/health`.
 
----
+**Alternative using pip:**
 
-### 🌐 Web (Vite + React)
+```bash
+python -m venv .venv
+# Activate the virtual environment, then:
+pip install -e ".[test]"
+uvicorn app.main:app --reload
+```
+
+### 4. Configure and run the frontend
+
+In a second terminal:
 
 ```bash
 cd web
 cp .env.example .env
-# Edit .env with your values
-npm install
+```
+
+Set the local values for:
+- `VITE_ENGINE_URL=http://127.0.0.1:8000`
+- `VITE_SUPABASE_URL=http://127.0.0.1:54321`
+- `VITE_SUPABASE_ANON_KEY` to the local anon key shown by `supabase status`
+
+Install the exact frontend dependency versions from the committed npm lockfile and start Vite:
+
+```bash
+npm ci
 npm run dev
 ```
 
-> ✅ The web app will be available at `http://localhost:5173` and will call the engine at `VITE_ENGINE_URL`.
+Open `http://localhost:5173`.
 
----
+> **Windows PowerShell:** `Copy-Item .env.example .env` can be used instead of `cp`. The remaining commands are the same when the required tools are on PATH.
 
-### 🧪 Running Tests
+## Local database and demo seed setup
+
+The migration chain creates the schema and baseline organisation. Demo Auth users and sample application data are separate from schema migrations because their rows must reference real Auth user UUIDs.
+
+Follow the exact sequence in [supabase/migrations/README.md](supabase/migrations/README.md):
+1. Start local Supabase and run `supabase db reset`.
+2. Create the local demo Auth users in Supabase Studio.
+3. Run `supabase/seed/seed_users.sql` with their actual UUIDs.
+4. Run `supabase/seed/seed_content.sql` with the Creator UUID.
+
+The seed scripts are for local development/testing. They are not the production demo-account provisioning mechanism.
+
+## Tests and builds
+
+Backend (from `engine/`):
 
 ```bash
-# Engine tests (from engine/ directory)
-cd engine
 uv run pytest -v
-
-# Web tests
-cd web
-npm run test
 ```
 
----
+Frontend (from `web/`):
 
-## 📦 Deployment
+```bash
+npm test
+npm run build
+```
 
-### Vercel (Web)
+Database/schema tests and their prerequisites are documented in [supabase/migrations/README.md](supabase/migrations/README.md).
 
-![Vercel](https://img.shields.io/badge/Platform-Vercel-000000?style=flat-square&logo=vercel&logoColor=white)
+## Deployment
 
-1. Connect this repository to Vercel
-2. Set root directory to `web/`
-3. **Node.js version**: Vercel reads `engines.node` in `package.json` ([docs](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions): "You can define the major Node.js version in the `engines#node` section of the `package.json` to override the one you have selected in the Project Settings"). This repo sets `"engines": {"node": "22.x"}` in `web/package.json`.
-4. Add environment variables from `web/.env.example`:
-   - `VITE_ENGINE_URL=https://your-engine.onrender.com`
-   - `VITE_SUPABASE_URL=...`
-   - `VITE_SUPABASE_ANON_KEY=...`
-5. Deploy
+### Vercel — frontend
 
----
+- Repository: `SiddharthaOG/AnchorDraft`
+- Root directory: `web/`
+- Node.js: 22.x (also declared in `web/package.json`)
+- Install command: `npm ci`
+- Build command: `npm run build`
+- Output directory: `dist`
 
-### Render (Engine)
+Set the variables from `web/.env.example`:
+- `VITE_ENGINE_URL`: deployed Render API base URL, without a trailing slash
+- `VITE_SUPABASE_URL`: hosted Supabase project URL
+- `VITE_SUPABASE_ANON_KEY`: hosted Supabase publishable/anon key
 
-![Render](https://img.shields.io/badge/Platform-Render-46E3B7?style=flat-square&logo=render&logoColor=white)
+Only the public browser key belongs in the frontend. Never put a service-role key or provider API key in a `VITE_*` variable.
 
-1. Create a new Web Service on Render
-2. Connect this repository
-3. Set root directory to `engine/`
-4. **Python version**: Render's docs state: "Set your service's `PYTHON_VERSION` environment variable to a fully qualified Python version (e.g., `3.13.5`). You can specify any released version from `3.7.3` onward" ([docs](https://render.com/docs/python-version)). **Reasoning**: The `.python-version` file is read from the repo root, but since the service root is `engine/`, set the Render environment variable `PYTHON_VERSION=3.12.10`.
-5. Build command: `pip install -e .` (runtime deps only, no test extras)
-6. Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-7. Add environment variables from `engine/.env.example`:
-   - `VERSION=0.1.0`
-   - `ALLOWED_ORIGINS=https://your-app.vercel.app,http://localhost:5173`
-   - `SUPABASE_URL=...`
-   - `SUPABASE_SERVICE_ROLE_KEY=...`
-   - `LLM_PROVIDER=fake`
-   - `LLM_MODEL=`
-   - `DAILY_REVIEW_CAP=20`
-   - `PYTHON_VERSION=3.12.10`
-8. Deploy
+### Render — backend
 
----
+- Repository: `SiddharthaOG/AnchorDraft`
+- Root directory: `engine/`
+- Python version: set `PYTHON_VERSION=3.12.10`
+- Build command: `pip install -e .`
+- Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 
-## 📚 Documentation
+Configure the backend variables listed in [engine/README.md](engine/README.md) and `engine/.env.example`. In staging/production:
+- Set `ENVIRONMENT=staging` or `production`.
+- Set `LLM_PROVIDER` to a real configured provider (`groq` or `gemini`); `fake` is rejected outside local/test environments.
+- Configure the matching primary provider key.
+- If fallback is enabled, configure the fallback provider and its key as well.
+- Set exact allowed frontend origins in `ALLOWED_ORIGINS`.
+- Set the database, Supabase service-role and JWT verification values.
+- Generate and securely store `PREVIEW_ENCRYPTION_KEY` for confidentiality preview processing.
+
+Do not use `supabase db reset --remote` against production. Review and apply database changes through the migration workflow.
+
+## Documentation
 
 | Document | Description |
-|----------|-------------|
-| 📐 [Architecture](docs/ARCHITECTURE.md) | System architecture overview |
-| 🗄️ [Data Model](docs/DATA_MODEL.md) | Database schema and models |
-| 📡 [API Contract](docs/API_CONTRACT.md) | API specifications and endpoints |
-| 🤖 [Review Engine](docs/REVIEW_ENGINE.md) | Review engine internals |
-| 📝 [AI Log](docs/ai-log/log.md) | AI development log |
-| 🧠 [Decisions](docs/ai-log/decisions.md) | Architectural decision records |
-| 🔍 [Disclosure](docs/DISCLOSURE.md) | Project disclosure information |
+|---|---|
+| [Architecture](docs/ARCHITECTURE.md) | Current system architecture, trust boundaries and workflows |
+| [Data Model](docs/DATA_MODEL.md) | Database entities, relationships and workflow functions |
+| [API Contract](docs/API_CONTRACT.md) | API and data-access contract |
+| [Review Engine](docs/REVIEW_ENGINE.md) | Review pipeline, validation and provider behaviour |
+| [Engine setup](engine/README.md) | Backend configuration, local run and deployment |
+| [Supabase migrations](supabase/migrations/README.md) | Local schema setup, migrations and seed data |
+| [AI development log](docs/ai-log/log.md) | Development activity and disclosure |
+| [Architecture decisions](docs/ai-log/decisions.md) | Recorded project decisions |
+| [Disclosure](docs/DISCLOSURE.md) | Project disclosure information |
 
----
+## Security notes
 
-## 📄 License
+- Never commit `.env` files, Supabase service-role keys, JWT signing secrets, provider keys, or generated encryption keys.
+- The frontend uses only the Supabase public anon/publishable key.
+- Backend endpoints verify Supabase JWTs and enforce role and organisation checks.
+- Do not use real confidential content with free-tier external AI accounts unless the applicable provider terms and organisation policy have been reviewed.
+- Demo credentials are intentionally not stored in this repository.
 
-This project is licensed under the **MIT** License.
+## License
 
-![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)
-
----
+MIT — see [LICENSE](LICENSE).
 
 <div align="center">
 
