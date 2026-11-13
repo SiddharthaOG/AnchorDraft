@@ -138,6 +138,9 @@ const appRoutes: RouteObject[] = [
     { path: 'kits', element: <RoleRoute allowedRoles={['owner']}><KitList /></RoleRoute> },
     { path: 'kits/:kitId', element: <RoleRoute allowedRoles={['owner']}><KitDetail /></RoleRoute> },
     { path: 'approvals', element: <RoleRoute allowedRoles={['manager', 'owner']}><ManagerLanding /></RoleRoute> },
+    // Submitted items opened from the approvals queue use the shared read-only
+    // content detail view. Its edit controls remain disabled for submitted content.
+    { path: 'approvals/:contentId', element: <RoleRoute allowedRoles={['manager', 'owner']}><ContentDetail /></RoleRoute> },
     { path: 'review', element: <RoleRoute allowedRoles={['reviewer', 'owner']}><ReviewerLanding /></RoleRoute> },
     { path: 'insights', element: <RoleRoute allowedRoles={['owner', 'manager', 'reviewer']}><InsightsLanding /></RoleRoute> },
   ] },

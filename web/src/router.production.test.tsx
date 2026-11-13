@@ -35,9 +35,13 @@ vi.mock('./lib/data', () => ({
 }))
 
 // Keep this route integration test focused on auth + protected routing.
-// CreatorLanding's own rendering/data behavior is covered by its feature tests.
+// Feature-specific rendering/data behavior is covered by each feature's tests.
 vi.mock('./features/contents/CreatorLanding', () => ({
   CreatorLanding: () => <div>Welcome back, Test</div>,
+}))
+
+vi.mock('./features/contents/ContentDetail', () => ({
+  ContentDetail: () => <div>Submitted content detail</div>,
 }))
 
 const creatorSession = {
@@ -125,5 +129,35 @@ describe('production login-to-dashboard route', () => {
     expect(container.querySelector('[class^="ad-"], [class*=" ad-"]')).not.toBeInTheDocument()
     expect(container.querySelector('.anchordraft-page .anchordraft-route-transition')).not.toBeEmptyDOMElement()
     expect(mockSignInWithEmail).toHaveBeenCalledWith('creator@example.com', 'test-password')
+  })
+
+  it('allows an authenticated owner to open a submitted item from approvals', async () => {
+    mockInitializeSession.mockResolvedValue({
+      ...creatorSession,
+      currentRoles: ['owner'],
+    })
+
+    const router = createMemoryAppRouter(['/approvals/content-123'])
+    render(
+      <AuthProvider>
+        <RouterProvider router={router} />
+      </AuthProvider>,
+    )
+
+    expect(await screen.findByText('Submitted content detail')).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Main navigation' })).toBeInTheDocument()
+  })
+
+  it('requires authentication before opening an approvals item directly', async () => {
+    mockInitializeSession.mockResolvedValue(null)
+
+    const router = createMemoryAppRouter(['/approvals/content-123'])
+    render(
+      <AuthProvider>
+        <RouterProvider router={router} />
+      </AuthProvider>,
+    )
+
+    expect(await screen.findByText('Sign in to AnchorDraft')).toBeInTheDocument()
   })
 })
