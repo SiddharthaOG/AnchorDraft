@@ -1,4 +1,4 @@
-﻿/** Application routing configuration. */
+/** Application routing configuration. */
 import React from 'react';
 import { createBrowserRouter, createMemoryRouter, RouterProvider, Navigate, useRouteError, type RouteObject } from 'react-router-dom';
 import { useAuth } from '../features/auth/AuthProvider';
@@ -47,9 +47,9 @@ function RouteErrorScreen() {
   }, [error]);
 
   return (
-    <main className="ad-error-screen" role="alert">
-      <div className="ad-error-mark" aria-hidden="true">!</div>
-      <p className="ad-eyebrow">ANCHORDRAFT / ROUTE RECOVERY</p>
+    <main className="anchordraft-error-screen" role="alert">
+      <div className="anchordraft-error-mark" aria-hidden="true">!</div>
+      <p className="anchordraft-eyebrow">ANCHORDRAFT / ROUTE RECOVERY</p>
       <h1>This workspace page could not load.</h1>
       <p>The application encountered a page error. Reload the workspace to try again.</p>
       <button type="button" onClick={() => window.location.reload()}>Reload workspace</button>
