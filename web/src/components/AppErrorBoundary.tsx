@@ -31,9 +31,9 @@ export class AppErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <main className="ad-error-screen" role="alert">
-          <div className="ad-error-mark" aria-hidden="true">!</div>
-          <p className="ad-eyebrow">ANCHORDRAFT / RECOVERY</p>
+        <main className="anchordraft-error-screen" role="alert">
+          <div className="anchordraft-error-mark" aria-hidden="true">!</div>
+          <p className="anchordraft-eyebrow">ANCHORDRAFT / RECOVERY</p>
           <h1>Something interrupted this workspace.</h1>
           <p>Something went wrong while rendering this page. If you had unsaved edits, they may not have been saved. Reload the application to try again.</p>
           <button type="button" onClick={this.recover}>Reload workspace <span aria-hidden="true">↗</span></button>
