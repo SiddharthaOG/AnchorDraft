@@ -1039,6 +1039,49 @@ async function getAuthToken(): Promise<string> {
 }
 
 
+export async function updateKitName(kitId: string, name: string): Promise<string> {
+  const token = await getAuthToken();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await fetch(getEngineUrl() + '/v1/kits/' + encodeURIComponent(kitId) + '/name', {
+      method: 'PATCH',
+      signal: controller.signal,
+      cache: 'no-store',
+      headers: {
+        Authorization: 'Bearer ' + token,
+        'Content-Type': 'application/json',
+        'X-Request-Id': crypto.randomUUID(),
+      },
+      body: JSON.stringify({ name }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const apiError = getApiErrorDetails(errorData);
+      throw new ReviewEngineError(
+        apiError.message || ('Kit name update failed: ' + response.status + ' ' + response.statusText),
+        response.status,
+        undefined,
+        apiError.reason,
+        apiError.retryAfterSeconds,
+      );
+    }
+    const data: unknown = await response.json();
+    if (!data || typeof data !== 'object' || !('name' in data) || typeof data.name !== 'string') {
+      throw new ReviewEngineError('The kit name update response was invalid.', 500);
+    }
+    return data.name;
+  } catch (err) {
+    if (err instanceof ReviewEngineError) throw err;
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new ReviewEngineError('Kit name update timed out.', 504, err);
+    }
+    throw new ReviewEngineError(err instanceof Error ? err.message : 'Network error', 0, err instanceof Error ? err : undefined);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export async function updateKitVisualGuidelines(
   kitId: string,
   visualGuidelines: VisualGuidelines,

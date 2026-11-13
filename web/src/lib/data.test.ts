@@ -74,6 +74,7 @@ const {
   confirmReviewPreview,
   uploadVisualAsset,
   updateKitVisualGuidelines,
+  updateKitName,
   createRule,
   updateRule,
   deleteRule,
@@ -1161,6 +1162,51 @@ describe('review preview and confirmation API', () => {
     await expect(createReviewPreview('revision-1')).rejects.toMatchObject({
       name: 'ReviewEngineError',
       status: 500,
+    });
+  });
+});
+
+describe('kit name update API', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch.mockReset();
+    mockAuthGetSession.mockResolvedValue({
+      data: { session: { access_token: 'test-token' } },
+      error: null,
+    });
+  });
+
+  it('saves the name through the authenticated draft-kit endpoint', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ kit_id: 'kit-draft-1', name: 'Campaign Brand Kit' }),
+    });
+
+    const result = await updateKitName('kit-draft-1', 'Campaign Brand Kit');
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/v1/kits/kit-draft-1/name'),
+      expect.objectContaining({
+        method: 'PATCH',
+        cache: 'no-store',
+        headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
+        body: JSON.stringify({ name: 'Campaign Brand Kit' }),
+      }),
+    );
+    expect(result).toBe('Campaign Brand Kit');
+  });
+
+  it('surfaces server-side draft immutability errors', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      statusText: 'Conflict',
+      json: async () => ({ detail: { error: { code: 'kit_not_editable', message: 'Only draft kits can be renamed' } } }),
+    });
+
+    await expect(updateKitName('kit-active-1', 'Changed')).rejects.toMatchObject({
+      status: 409,
+      message: 'Only draft kits can be renamed',
     });
   });
 });

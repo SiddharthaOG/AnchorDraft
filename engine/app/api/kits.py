@@ -101,6 +101,90 @@ class UpdateVisualGuidelinesRequest(_VisualGuidelineModel):
     visual_guidelines: VisualGuidelines
 
 
+class UpdateKitNameRequest(_VisualGuidelineModel):
+    name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Kit name cannot be empty")
+        return normalized
+
+
+@router.patch(
+    "/kits/{kit_id}/name",
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Kit name saved"},
+        403: {"description": "Forbidden - not an owner"},
+        404: {"description": "Kit not found"},
+        409: {"description": "Only draft kits can be edited"},
+        422: {"description": "Invalid kit name"},
+    },
+)
+async def update_kit_name(
+    kit_id: UUID = Path(..., description="Draft brand kit ID"),
+    body: UpdateKitNameRequest = ...,
+    user: AuthUser = Depends(require_owner),
+    pool: DatabasePool = Depends(get_db_pool),
+):
+    """Rename an owner-managed draft kit without changing its version or rules."""
+    async with pool.pool.acquire() as conn:
+        async with conn.transaction():
+            kit = await conn.fetchrow(
+                """
+                select id, status, name
+                  from public.brand_kits
+                 where id = $1 and org_id = $2
+                 for update
+                """,
+                kit_id,
+                user.org_id,
+            )
+            if not kit:
+                raise HTTPException(status_code=404, detail="Kit not found")
+            if kit["status"] != "draft":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": {
+                            "code": "kit_not_editable",
+                            "message": "Only draft kits can be renamed",
+                        }
+                    },
+                )
+
+            updated = await conn.fetchrow(
+                """
+                update public.brand_kits
+                   set name = $3
+                 where id = $1 and org_id = $2 and status = 'draft'
+                returning name
+                """,
+                kit_id,
+                user.org_id,
+                body.name,
+            )
+            if not updated:
+                raise HTTPException(status_code=409, detail="Kit changed while saving its name")
+
+            await conn.execute(
+                """
+                insert into public.audit_log
+                    (org_id, actor_id, action, entity_type, entity_id, detail)
+                values ($1, $2, 'kit.renamed', 'brand_kit', $3, $4::jsonb)
+                """,
+                user.org_id,
+                user.user_id,
+                kit_id,
+                json.dumps({"previous_name": kit["name"], "name": body.name}, separators=(",", ":")),
+            )
+
+    return {"kit_id": str(kit_id), "name": body.name}
+
+
 @router.put(
     "/kits/{kit_id}/visual-guidelines",
     status_code=status.HTTP_200_OK,
